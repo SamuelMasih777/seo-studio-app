@@ -1,4 +1,4 @@
-# SEO Suite DFD (Shopify App) — Detailed Requirements
+# SEO Suite DFD (Shopify App) - Detailed Requirements
 
 ## 1. 🎯 Product Vision
 Build an all-in-one modular on-page SEO optimization app for Shopify stores that:

@@ -1,5 +1,12 @@
 import type { HeadersFunction, LoaderFunctionArgs } from "@remix-run/node";
-import { Link, Outlet, useLoaderData, useRouteError, useNavigation } from "@remix-run/react";
+import {
+  Link,
+  Outlet,
+  useLoaderData,
+  useRouteError,
+  useNavigation,
+  isRouteErrorResponse,
+} from "@remix-run/react";
 import { boundary } from "@shopify/shopify-app-remix/server";
 import { AppProvider } from "@shopify/shopify-app-remix/react";
 import { NavMenu } from "@shopify/app-bridge-react";
@@ -123,7 +130,21 @@ export default function App() {
 
 // Shopify needs Remix to catch some thrown responses, so that their headers are included in the response.
 export function ErrorBoundary() {
-  return boundary.error(useRouteError());
+  const error = useRouteError();
+  // Shopify boundary renders empty content when ErrorResponse.data is blank; show status text instead.
+  if (isRouteErrorResponse(error)) {
+    const detail =
+      typeof error.data === "string" && error.data.trim()
+        ? error.data
+        : error.statusText || `HTTP ${error.status}`;
+    return (
+      <div style={{ padding: 24, maxWidth: 720, fontFamily: "system-ui, sans-serif" }}>
+        <h1 style={{ fontSize: 18, marginBottom: 8 }}>Something went wrong</h1>
+        <p style={{ margin: 0, color: "#444", lineHeight: 1.5 }}>{detail}</p>
+      </div>
+    );
+  }
+  return boundary.error(error);
 }
 
 export const headers: HeadersFunction = (headersArgs) => {
