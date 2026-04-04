@@ -1,0 +1,98 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Note that some adapters may set a maximum length for the String type by default, please ensure your strings are long
+// enough when changing adapters.
+// See https://www.prisma.io/docs/orm/reference/prisma-schema-reference#string for more information
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Session {
+  id                  String    @id
+  shop                String
+  state               String
+  isOnline            Boolean   @default(false)
+  scope               String?
+  expires             DateTime?
+  accessToken         String
+  userId              BigInt?
+  firstName           String?
+  lastName            String?
+  email               String?
+  accountOwner        Boolean   @default(false)
+  locale              String?
+  collaborator        Boolean?  @default(false)
+  emailVerified       Boolean?  @default(false)
+  refreshToken        String?
+  refreshTokenExpires DateTime?
+}
+
+model StoreSettings {
+  id                String   @id @default(uuid())
+  shop              String   @unique
+  plan              String   @default("free") // free, basic, pro, advanced
+  aiTokensUsed      Int      @default(0)
+  aiTokensLimit     Int      @default(100)
+  customPromptTone  String?  @default("persuasive")
+  autoFixEnabled    Boolean  @default(false)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+model AuditHistory {
+  id                    String   @id @default(uuid())
+  shop                  String
+  score                 Int
+  metaIssuesCount       Int
+  missingAltCount       Int
+  brokenLinksCount      Int
+  duplicateContentCount Int
+  scannedAt             DateTime @default(now())
+
+  @@index([shop, scannedAt])
+}
+
+model BrokenLinkLog {
+  id          String   @id @default(uuid())
+  shop        String
+  url         String
+  statusCode  Int
+  detectedAt  DateTime @default(now())
+  fixed       Boolean  @default(false)
+
+  @@index([shop, fixed])
+}
+
+model AIPromptTemplate {
+  id          String   @id @default(uuid())
+  shop        String
+  name        String
+  description String?
+  template    String
+  tone        String   @default("professional")
+  isDefault   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([shop])
+}
+
+model ScheduledAutomation {
+  id             String   @id @default(uuid())
+  shop           String
+  type           String   // e.g., "broken_link_scan", "seo_audit"
+  frequency      String   // e.g., "daily", "weekly", "monthly"
+  lastRunAt      DateTime?
+  nextRunAt      DateTime?
+  status         String   @default("active") // active, paused
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([shop])
+}
