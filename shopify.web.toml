@@ -3,5 +3,6 @@ roles = ["frontend", "backend"]
 webhooks_path = "/webhooks/app/uninstalled"
 
 [commands]
-predev = "npx prisma generate"
-dev = "npx prisma migrate deploy && npm exec remix vite:dev"
+# Use node on the CLI entry so Windows works even when .bin lacks prisma.cmd (e.g. partial install).
+predev = "node ./node_modules/prisma/build/index.js generate"
+dev = "node ./node_modules/prisma/build/index.js migrate deploy && npm exec remix vite:dev"
