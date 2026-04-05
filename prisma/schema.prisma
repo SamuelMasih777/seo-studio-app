@@ -58,6 +58,14 @@ model AuditHistory {
   @@index([shop, scannedAt])
 }
 
+/// Cached full-dashboard SEO scan (manual Run audit / Rescan); loader reads this only.
+model DashboardSeoSnapshot {
+  id        String   @id @default(uuid())
+  shop      String   @unique
+  payload   Json
+  scannedAt DateTime @default(now()) @updatedAt
+}
+
 model BrokenLinkLog {
   id          String   @id @default(uuid())
   shop        String
