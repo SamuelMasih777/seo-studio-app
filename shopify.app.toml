@@ -2,7 +2,7 @@
 
 client_id = "4311d25fd5f1f444206f2518f2bc47df"
 name = "SEO Suite AI"
-application_url = "https://example.com"
+application_url = "https://seo-studio-app.vercel.app"
 embedded = true
 
 [build]
@@ -24,4 +24,4 @@ api_version = "2026-07"
 scopes = "write_products, read_products, read_content, write_content, write_files, read_files, write_online_store_navigation, read_online_store_navigation, read_themes"
 
 [auth]
-redirect_urls = [ "https://example.com/api/auth" ]
+redirect_urls = [ "https://seo-studio-app.vercel.app/api/auth" ]
