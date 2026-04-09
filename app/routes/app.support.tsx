@@ -377,6 +377,24 @@ export default function SupportPage() {
             </Card>
           </Layout.Section>
         </Layout>
+
+        {/* Footer */}
+        <Divider />
+        <div style={{ textAlign: "center", padding: "8px 0 4px" }}>
+          <InlineStack align="center" gap="300">
+            <Link url="/app/privacy-policy" removeUnderline>
+              <Text as="span" variant="bodySm" tone="subdued">Privacy Policy</Text>
+            </Link>
+            <Text as="span" variant="bodySm" tone="subdued">·</Text>
+            <Link url={`mailto:${SUPPORT_EMAIL}`} removeUnderline>
+              <Text as="span" variant="bodySm" tone="subdued">{SUPPORT_EMAIL}</Text>
+            </Link>
+            <Text as="span" variant="bodySm" tone="subdued">·</Text>
+            <Text as="span" variant="bodySm" tone="subdued">
+              © {new Date().getFullYear()} Design Flow Digitals
+            </Text>
+          </InlineStack>
+        </div>
       </BlockStack>
     </Page>
   );
