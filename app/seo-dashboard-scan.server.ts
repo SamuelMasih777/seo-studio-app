@@ -756,6 +756,23 @@ export type DashboardScanSummary = {
   blogSampleCount: number;
 };
 
+export type IssueCategory =
+  | "Speed Optimization"
+  | "Content Optimization"
+  | "Search Appearance"
+  | "Technical SEO";
+
+export type IssueSeverity = "critical" | "warning" | "good";
+
+export type IssueDetail = {
+  category: IssueCategory;
+  severity: IssueSeverity;
+  title: string;
+  description: string;
+  count: number;
+  link?: string;
+};
+
 export type DashboardScanPayload = {
   seoScore: number;
   healthLabel: "Low" | "Medium" | "High";
@@ -769,6 +786,7 @@ export type DashboardScanPayload = {
   criticalIssue: number;
   needImprovement: number;
   goodResult: number;
+  issues: IssueDetail[];
   scanSummary: DashboardScanSummary;
 };
 
@@ -786,6 +804,7 @@ export function getEmptyDashboardPayload(): DashboardScanPayload {
     criticalIssue: 0,
     needImprovement: 0,
     goodResult: 0,
+    issues: [],
     scanSummary: {
       productCount: 0,
       productImageCount: 0,
@@ -867,7 +886,7 @@ export async function runFullDashboardScan(
 
     if (!product.seo?.description) {
       metaIssuesCount++;
-      score -= 30;
+      score -= 15;
     }
 
     let missingAlts = 0;
@@ -876,7 +895,7 @@ export async function runFullDashboardScan(
     }
 
     if (missingAlts > 0) {
-      score -= Math.min(40, 10 * missingAlts);
+      score -= Math.min(20, 5 * missingAlts);
       missingAltCount += missingAlts;
     }
 
@@ -928,29 +947,29 @@ export async function runFullDashboardScan(
   for (const p of pages) validateHtml(p.body);
 
   let livePenaltyBudget = 0;
-  const LIVE_PENALTY_CAP = 48;
+  const LIVE_PENALTY_CAP = 25;
   for (const m of liveMetrics) {
     if (!m.ok) {
-      livePenaltyBudget += 4;
+      livePenaltyBudget += 3;
       continue;
     }
     if (m.h1Count !== 1) {
       metaIssuesCount++;
-      livePenaltyBudget += 7;
+      livePenaltyBudget += 4;
     }
     if (!m.hasMetaDescription) {
       metaIssuesCount++;
-      livePenaltyBudget += 6;
+      livePenaltyBudget += 4;
     }
     if (m.titleLength > 0) {
       if (m.titleLength < 10 || m.titleLength > 70) {
         metaIssuesCount++;
-        livePenaltyBudget += 4;
+        livePenaltyBudget += 3;
       }
     }
     if (m.imgsMissingAlt > 0) {
       missingAltCount += m.imgsMissingAlt;
-      livePenaltyBudget += Math.min(12, m.imgsMissingAlt * 2);
+      livePenaltyBudget += Math.min(6, m.imgsMissingAlt * 2);
     }
   }
   averageScore -= Math.min(LIVE_PENALTY_CAP, livePenaltyBudget);
@@ -1060,8 +1079,158 @@ export async function runFullDashboardScan(
     products.length +
     pages.length +
     articles.length +
-    liveUrls.length +
-    themeMetrics.filesRead;
+    liveUrls.length;
+
+  const liveNoMetaDesc = liveMetrics.filter(
+    (m) => m.ok && !m.hasMetaDescription,
+  ).length;
+  const liveTitleBad = liveMetrics.filter(
+    (m) =>
+      m.ok && m.titleLength > 0 && (m.titleLength < 10 || m.titleLength > 70),
+  ).length;
+
+  const issues: IssueDetail[] = [];
+  const pushIf = (cond: boolean, d: IssueDetail) => {
+    if (cond) issues.push(d);
+  };
+
+  pushIf(productsNoTitle > 0, {
+    category: "Content Optimization",
+    severity: "critical",
+    title: "Products missing SEO title",
+    description: `${productsNoTitle} product(s) have no SEO title set. Search engines use this as the page title in results.`,
+    count: productsNoTitle,
+    link: "/app/meta-tags",
+  });
+  pushIf(liveH1Bad > 0, {
+    category: "Content Optimization",
+    severity: "critical",
+    title: "Multiple H1 tags found",
+    description: `${liveH1Bad} live page(s) have zero or multiple H1 tags. Each page should have exactly one H1.`,
+    count: liveH1Bad,
+    link: "/app/seo-audit",
+  });
+  pushIf(liveFetchFailed > 0, {
+    category: "Technical SEO",
+    severity: "critical",
+    title: "Live page fetch failed",
+    description: `${liveFetchFailed} storefront URL(s) returned errors or timed out during the scan.`,
+    count: liveFetchFailed,
+  });
+  pushIf(brokenLinksCount > 0, {
+    category: "Search Appearance",
+    severity: "critical",
+    title: "Broken internal links",
+    description: `${brokenLinksCount} internal link(s) point to products that no longer exist in your catalog.`,
+    count: brokenLinksCount,
+    link: "/app/broken-links",
+  });
+
+  pushIf(productsNoDesc > 0, {
+    category: "Content Optimization",
+    severity: "warning",
+    title: "Products missing SEO description",
+    description: `${productsNoDesc} product(s) have no SEO description. Add descriptions to improve click-through rates.`,
+    count: productsNoDesc,
+    link: "/app/content-optimization",
+  });
+  pushIf(duplicateContentCount > 0, {
+    category: "Content Optimization",
+    severity: "warning",
+    title: "Duplicate SEO titles",
+    description: `${duplicateContentCount} product(s) share the same SEO title with another product.`,
+    count: duplicateContentCount,
+    link: "/app/meta-tags",
+  });
+  pushIf(missingAltCount > 0, {
+    category: "Search Appearance",
+    severity: "warning",
+    title: "Image alt texts missing",
+    description: `${missingAltCount} image(s) are missing alt text. Alt text helps search engines and accessibility.`,
+    count: missingAltCount,
+    link: "/app/image-optimization",
+  });
+  pushIf(liveNoMetaDesc > 0, {
+    category: "Technical SEO",
+    severity: "warning",
+    title: "Missing meta description (live pages)",
+    description: `${liveNoMetaDesc} live page(s) have no meta description tag.`,
+    count: liveNoMetaDesc,
+    link: "/app/meta-tags",
+  });
+  pushIf(liveTitleBad > 0, {
+    category: "Content Optimization",
+    severity: "warning",
+    title: "Title length issues on live pages",
+    description: `${liveTitleBad} live page(s) have titles shorter than 10 or longer than 70 characters.`,
+    count: liveTitleBad,
+    link: "/app/meta-tags",
+  });
+  pushIf(pagesWeakTitle > 0, {
+    category: "Content Optimization",
+    severity: "warning",
+    title: "Pages with weak titles",
+    description: `${pagesWeakTitle} CMS page(s) have titles that are too short or too long.`,
+    count: pagesWeakTitle,
+  });
+  pushIf(articlesWeakTitle > 0, {
+    category: "Content Optimization",
+    severity: "warning",
+    title: "Articles with weak titles",
+    description: `${articlesWeakTitle} blog article(s) have very short titles.`,
+    count: articlesWeakTitle,
+  });
+  pushIf(themeIssuesCount > 0, {
+    category: "Technical SEO",
+    severity: "warning",
+    title: "Missing viewport meta in theme",
+    description: "Your main theme layout is missing a viewport meta tag, which affects mobile SEO.",
+    count: themeIssuesCount,
+  });
+  pushIf(totalProductImages > 0, {
+    category: "Speed Optimization",
+    severity: "warning",
+    title: "Images may need compression",
+    description: `${totalProductImages} product image(s) found. Compress them to improve page load speed.`,
+    count: totalProductImages,
+    link: "/app/image-compression",
+  });
+
+  pushIf(goodProducts > 0, {
+    category: "Content Optimization",
+    severity: "good",
+    title: "Products with complete SEO",
+    description: `${goodProducts} product(s) have title, description, and alt text on all images.`,
+    count: goodProducts,
+  });
+  pushIf(goodPages > 0, {
+    category: "Content Optimization",
+    severity: "good",
+    title: "Pages with good titles",
+    description: `${goodPages} CMS page(s) have well-sized titles (5-60 characters).`,
+    count: goodPages,
+  });
+  pushIf(goodArticles > 0, {
+    category: "Content Optimization",
+    severity: "good",
+    title: "Articles with good titles",
+    description: `${goodArticles} blog article(s) have adequately-sized titles.`,
+    count: goodArticles,
+  });
+  pushIf(goodLive > 0, {
+    category: "Technical SEO",
+    severity: "good",
+    title: "Live pages fully optimized",
+    description: `${goodLive} live storefront page(s) passed all SEO checks (H1, meta desc, title, alt text).`,
+    count: goodLive,
+  });
+  pushIf(themeGood > 0, {
+    category: "Technical SEO",
+    severity: "good",
+    title: "Theme viewport meta present",
+    description: "Your main theme layout includes the viewport meta tag for mobile SEO.",
+    count: themeGood,
+  });
 
   return {
     seoScore: averageScore,
@@ -1076,6 +1245,7 @@ export async function runFullDashboardScan(
     criticalIssue,
     needImprovement,
     goodResult,
+    issues,
     scanSummary: {
       productCount: products.length,
       productImageCount: totalProductImages,

@@ -32,6 +32,8 @@ import {
   generateProductImageAltPlain,
   isGeminiConfigured,
 } from "../gemini-content.server";
+import { resolvePromptForShop } from "../prompt-resolver.server";
+import prisma from "../db.server";
 
 /** Minimum length for alt text to count as descriptive (not just a token). */
 const ALT_MIN_QUALITY_LENGTH = 12;
@@ -64,7 +66,7 @@ function altStatusBadge(status: AltQualityStatus): { tone: "success" | "warning"
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { admin } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   const url = new URL(request.url);
   
   const cursor = url.searchParams.get("cursor");
@@ -118,11 +120,21 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     });
   });
 
+  let promptTemplates: { id: string; name: string; isDefault: boolean }[] = [];
+  try {
+    promptTemplates = await prisma.aIPromptTemplate.findMany({
+      where: { shop: session.shop },
+      select: { id: true, name: true, isDefault: true },
+      orderBy: { createdAt: "desc" },
+    });
+  } catch {}
+
   return {
     images,
     shopName,
     pageInfo: json.data.products.pageInfo,
     generationConfigured: isGeminiConfigured(),
+    promptTemplates,
   };
 };
 
@@ -222,7 +234,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const intent = formData.get("intent") as string;
 
   if (intent === "bulk_preview") {
-    await authenticate.admin(request);
+    const { session } = await authenticate.admin(request);
     let selected: BulkImageInput[];
     try {
       selected = JSON.parse(formData.get("imagesPayload") as string) as BulkImageInput[];
@@ -250,11 +262,17 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       error?: string;
     }[] = [];
 
+    const templateId = (formData.get("templateId") as string) || "";
+    const customPrompt = altSource === "ai"
+      ? await resolvePromptForShop(session.shop, { tone: "professional" }, templateId || undefined)
+      : null;
+
     for (const img of selected) {
       if (altSource === "ai") {
         const gen = await generateProductImageAltPlain({
           productTitle: img.productTitle || "Product",
           existingAlt: img.currentAlt?.trim() || undefined,
+          customPrompt,
         });
         if (!gen.ok) {
           results.push({
@@ -344,7 +362,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   if (intent === "suggest_alt") {
-    await authenticate.admin(request);
+    const { session: suggestSession } = await authenticate.admin(request);
     if (!isGeminiConfigured()) {
       return {
         success: false,
@@ -354,9 +372,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
     const productTitle = (formData.get("productTitle") as string) || "";
     const existingAlt = (formData.get("existingAlt") as string) || "";
+    const suggestTemplateId = (formData.get("templateId") as string) || "";
+    const suggestCustomPrompt = await resolvePromptForShop(suggestSession.shop, {
+      product_title: productTitle.trim(),
+    }, suggestTemplateId || undefined);
     const gen = await generateProductImageAltPlain({
       productTitle: productTitle.trim() || "Product",
       existingAlt: existingAlt.trim() || undefined,
+      customPrompt: suggestCustomPrompt,
     });
     if (!gen.ok) {
       return { success: false, error: gen.error };
@@ -434,11 +457,13 @@ type AltReviewRow = {
 type AltActionSuccess = Extract<ImageOptimizationActionJson, { success: true }>;
 
 export default function ImageOptimizationPage() {
-  const { images, shopName, pageInfo, generationConfigured } =
+  const { images, shopName, pageInfo, generationConfigured, promptTemplates } =
     useLoaderData<typeof loader>();
   const fetcher = useFetcher<ImageOptimizationActionJson>();
   const navigate = useNavigate();
 
+  const defaultTplId = promptTemplates.find((t: any) => t.isDefault)?.id || "";
+  const [selectedTemplateId, setSelectedTemplateId] = useState(defaultTplId);
   const [activeModal, setActiveModal] = useState(false);
   const [selectedImage, setSelectedImage] = useState<any>(null);
   const [editAltText, setEditAltText] = useState("");
@@ -511,10 +536,11 @@ export default function ImageOptimizationPage() {
         intent: "suggest_alt",
         productTitle: payload.productTitle,
         existingAlt: payload.existingAlt,
+        templateId: selectedTemplateId,
       },
       { method: "POST" },
     );
-  }, [pendingModalAiSuggest, generationConfigured, fetcher]);
+  }, [pendingModalAiSuggest, generationConfigured, fetcher, selectedTemplateId]);
 
   useEffect(() => {
     const data = fetcher.data;
@@ -634,6 +660,7 @@ export default function ImageOptimizationPage() {
         intent: "suggest_alt",
         productTitle: selectedImage.productTitle || "",
         existingAlt: editAltText || selectedImage.altText || "",
+        templateId: selectedTemplateId,
       },
       { method: "POST" },
     );
@@ -661,6 +688,7 @@ export default function ImageOptimizationPage() {
         imagesPayload: JSON.stringify(payload),
         altSource,
         shopName,
+        templateId: selectedTemplateId,
       },
       { method: "POST" },
     );
@@ -677,6 +705,7 @@ export default function ImageOptimizationPage() {
         imagesPayload: JSON.stringify(payload),
         altSource: "ai",
         shopName,
+        templateId: selectedTemplateId,
       },
       { method: "POST" },
     );
@@ -895,6 +924,30 @@ export default function ImageOptimizationPage() {
               </Banner>
             </Layout.Section>
           )}
+
+          <Layout.Section>
+            <InlineStack gap="300" blockAlign="end">
+              <div style={{ minWidth: 220 }}>
+                <Select
+                  label="AI Prompt Template"
+                  options={[
+                    { label: "Built-in (default)", value: "" },
+                    ...promptTemplates.map((t: any) => ({
+                      label: `${t.name}${t.isDefault ? " ★" : ""}`,
+                      value: t.id,
+                    })),
+                  ]}
+                  value={selectedTemplateId}
+                  onChange={setSelectedTemplateId}
+                />
+              </div>
+              <Text as="p" variant="bodySm" tone="subdued">
+                {selectedTemplateId
+                  ? "Using custom template for alt text"
+                  : "Using built-in prompts"}
+              </Text>
+            </InlineStack>
+          </Layout.Section>
 
           {showBanner.show && (
             <Layout.Section>

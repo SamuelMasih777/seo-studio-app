@@ -36,7 +36,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
   const formData = await request.formData();
-  
+
   const intent = formData.get("intent") as string;
 
   if (intent === "create" || intent === "update") {
@@ -67,6 +67,30 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return { success: true };
   }
 
+  if (intent === "set_default") {
+    const id = formData.get("id") as string;
+
+    await prisma.aIPromptTemplate.updateMany({
+      where: { shop, isDefault: true },
+      data: { isDefault: false },
+    });
+
+    await prisma.aIPromptTemplate.update({
+      where: { id, shop },
+      data: { isDefault: true },
+    });
+
+    return { success: true };
+  }
+
+  if (intent === "clear_default") {
+    await prisma.aIPromptTemplate.updateMany({
+      where: { shop, isDefault: true },
+      data: { isDefault: false },
+    });
+    return { success: true };
+  }
+
   return null;
 };
 
@@ -76,8 +100,7 @@ export default function AISettingsPage() {
 
   const [activeModal, setActiveModal] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState<any>(null);
-  
-  // Form State
+
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [template, setTemplate] = useState("");
@@ -95,7 +118,9 @@ export default function AISettingsPage() {
     setEditingTemplate(null);
     setName("");
     setDescription("");
-    setTemplate("Write a {{tone}} description for {{product_title}}. Focus on its features: {{product_description}}");
+    setTemplate(
+      "Write a {{tone}} description for {{product_title}}. Focus on its features: {{product_description}}",
+    );
     setTone("professional");
     setActiveModal(true);
   };
@@ -119,7 +144,7 @@ export default function AISettingsPage() {
         template,
         tone,
       },
-      { method: "POST" }
+      { method: "POST" },
     );
   };
 
@@ -129,21 +154,48 @@ export default function AISettingsPage() {
     }
   };
 
+  const handleSetDefault = (id: string) => {
+    fetcher.submit({ intent: "set_default", id }, { method: "POST" });
+  };
+
+  const handleClearDefault = () => {
+    fetcher.submit({ intent: "clear_default" }, { method: "POST" });
+  };
+
   const isSubmitting = fetcher.state === "submitting";
+  const currentDefault = templates.find((t: any) => t.isDefault);
 
   const rowMarkup = templates.map((tpl: any, index: number) => (
     <IndexTable.Row id={tpl.id} key={tpl.id} position={index}>
       <IndexTable.Cell>
-        <Text variant="bodyMd" fontWeight="bold" as="span">{tpl.name}</Text>
+        <InlineStack gap="200" blockAlign="center">
+          <Text variant="bodyMd" fontWeight="bold" as="span">
+            {tpl.name}
+          </Text>
+          {tpl.isDefault && <Badge tone="success">Default</Badge>}
+        </InlineStack>
       </IndexTable.Cell>
-      <IndexTable.Cell>{tpl.description}</IndexTable.Cell>
+      <IndexTable.Cell>{tpl.description || "—"}</IndexTable.Cell>
       <IndexTable.Cell>
         <Badge tone="info">{tpl.tone}</Badge>
       </IndexTable.Cell>
       <IndexTable.Cell>
         <InlineStack gap="200">
-          <Button size="micro" onClick={() => handleOpenEdit(tpl)}>Edit</Button>
-          <Button size="micro" tone="critical" onClick={() => handleDelete(tpl.id)}>Delete</Button>
+          <Button size="micro" onClick={() => handleOpenEdit(tpl)}>
+            Edit
+          </Button>
+          {!tpl.isDefault ? (
+            <Button size="micro" onClick={() => handleSetDefault(tpl.id)}>
+              Set Default
+            </Button>
+          ) : (
+            <Button size="micro" tone="critical" onClick={handleClearDefault}>
+              Unset Default
+            </Button>
+          )}
+          <Button size="micro" tone="critical" onClick={() => handleDelete(tpl.id)}>
+            Delete
+          </Button>
         </InlineStack>
       </IndexTable.Cell>
     </IndexTable.Row>
@@ -158,30 +210,47 @@ export default function AISettingsPage() {
       </TitleBar>
 
       <BlockStack gap="500">
+        {currentDefault && (
+          <Banner tone="success">
+            <Text as="p">
+              Active default template: <strong>{currentDefault.name}</strong> ({currentDefault.tone}).
+              All AI-generated content will use this template's instructions.
+            </Text>
+          </Banner>
+        )}
+
         <Layout>
           <Layout.Section>
             <Card padding="0">
               <BlockStack gap="400">
-                <div style={{ padding: '16px 16px 0 16px' }}>
-                  <Text as="h2" variant="headingLg">Custom AI Prompts</Text>
-                  <Text as="p" tone="subdued">Create and manage custom instructions that control how the AI writes your Meta Tags and Product Descriptions.</Text>
+                <div style={{ padding: "16px 16px 0 16px" }}>
+                  <Text as="h2" variant="headingLg">
+                    Custom AI Prompts
+                  </Text>
+                  <Text as="p" tone="subdued">
+                    Create and manage custom instructions that control how the AI writes your content.
+                    Set one template as the default to use it across all AI features.
+                  </Text>
                 </div>
-                
+
                 {templates.length === 0 ? (
-                  <div style={{ padding: '16px' }}>
+                  <div style={{ padding: "16px" }}>
                     <Banner tone="info" title="No templates found">
-                      <p>You haven't created any custom AI prompt templates yet. Click "Create Template" to get started.</p>
+                      <p>
+                        Click "Create Template" to create your first custom prompt.
+                        Until then, built-in prompts are used for AI generation.
+                      </p>
                     </Banner>
                   </div>
                 ) : (
                   <IndexTable
-                    resourceName={{ singular: 'template', plural: 'templates' }}
+                    resourceName={{ singular: "template", plural: "templates" }}
                     itemCount={templates.length}
                     headings={[
-                      { title: 'Name' },
-                      { title: 'Description' },
-                      { title: 'Tone' },
-                      { title: 'Action' },
+                      { title: "Name" },
+                      { title: "Description" },
+                      { title: "Tone" },
+                      { title: "Actions" },
                     ]}
                     selectable={false}
                   >
@@ -195,16 +264,48 @@ export default function AISettingsPage() {
           <Layout.Section variant="oneThird">
             <Card>
               <BlockStack gap="400">
-                <Text as="h3" variant="headingMd">Available Variables</Text>
-                <Text as="p" tone="subdued">Use these variables in your prompt templates. The AI will automatically replace them with real data.</Text>
-                <ul style={{ paddingLeft: '20px', margin: 0, color: 'var(--p-color-text-subdued)' }}>
-                  <li><code>{`{{product_title}}`}</code></li>
-                  <li><code>{`{{product_description}}`}</code></li>
-                  <li><code>{`{{shop_name}}`}</code></li>
-                  <li><code>{`{{tone}}`}</code></li>
-                </ul>
+                <Text as="h3" variant="headingMd">
+                  Available Variables
+                </Text>
+                <Text as="p" tone="subdued">
+                  Use these in your prompt templates. They are automatically replaced
+                  with real data when generating content.
+                </Text>
+                <BlockStack gap="100">
+                  <Text as="p" variant="bodySm">
+                    <code>{`{{product_title}}`}</code> -- Product name
+                  </Text>
+                  <Text as="p" variant="bodySm">
+                    <code>{`{{product_description}}`}</code> -- Existing description
+                  </Text>
+                  <Text as="p" variant="bodySm">
+                    <code>{`{{shop_name}}`}</code> -- Your store name
+                  </Text>
+                  <Text as="p" variant="bodySm">
+                    <code>{`{{tone}}`}</code> -- Writing tone
+                  </Text>
+                  <Text as="p" variant="bodySm">
+                    <code>{`{{keyword}}`}</code> -- Target SEO keyword
+                  </Text>
+                  <Text as="p" variant="bodySm">
+                    <code>{`{{topic}}`}</code> -- Blog topic (blog writer)
+                  </Text>
+                </BlockStack>
               </BlockStack>
             </Card>
+
+            <div style={{ marginTop: 16 }}>
+              <Card>
+                <BlockStack gap="200">
+                  <Text as="h3" variant="headingMd">How it works</Text>
+                  <Text as="p" variant="bodySm" tone="subdued">
+                    Mark one template as "Default" and it will be used whenever
+                    AI generates product descriptions, alt text, or blog content.
+                    If no default is set, the built-in prompts are used.
+                  </Text>
+                </BlockStack>
+              </Card>
+            </div>
           </Layout.Section>
         </Layout>
       </BlockStack>
@@ -218,12 +319,7 @@ export default function AISettingsPage() {
           onAction: handleSave,
           loading: isSubmitting,
         }}
-        secondaryActions={[
-          {
-            content: "Cancel",
-            onAction: toggleModal,
-          },
-        ]}
+        secondaryActions={[{ content: "Cancel", onAction: toggleModal }]}
       >
         <Modal.Section>
           <BlockStack gap="400">
@@ -249,6 +345,8 @@ export default function AISettingsPage() {
                 { label: "Persuasive", value: "persuasive" },
                 { label: "Humorous", value: "humorous" },
                 { label: "Urgent", value: "urgent" },
+                { label: "Friendly", value: "friendly" },
+                { label: "Informative", value: "informative" },
               ]}
               value={tone}
               onChange={setTone}
@@ -259,7 +357,7 @@ export default function AISettingsPage() {
               onChange={setTemplate}
               multiline={6}
               autoComplete="off"
-              helpText="Use {{variables}} to inject dynamic data into your prompt."
+              helpText="Use {{variables}} like {{product_title}}, {{tone}}, etc. They are replaced with real data at generation time."
             />
           </BlockStack>
         </Modal.Section>

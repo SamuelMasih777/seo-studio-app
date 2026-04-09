@@ -113,6 +113,7 @@ export default function App() {
         <Link to="/app/image-optimization">Image Alt Text</Link>
         <Link to="/app/image-compression">Image Compression</Link>
         <Link to="/app/content-optimization">AI Content</Link>
+        <Link to="/app/ai-blog-writer">AI Blog Writer</Link>
         <Link to="/app/llms-seo">LLMs SEO</Link>
         <Link to="/app/schema-markup">Schema</Link>
         <Link to="/app/internal-linking">Internal Links</Link>
@@ -122,6 +123,7 @@ export default function App() {
         <Link to="/app/automations">Automations</Link>
         <Link to="/app/ai-settings">AI Settings</Link>
         <Link to="/app/pricing">Pricing</Link>
+        <Link to="/app/support">Support</Link>
       </NavMenu>
       <Outlet />
     </AppProvider>

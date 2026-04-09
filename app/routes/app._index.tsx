@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
 import {
@@ -19,6 +19,9 @@ import {
   Grid,
   Icon,
   Banner,
+  Tabs,
+  Collapsible,
+  Divider,
 } from "@shopify/polaris";
 import { TitleBar } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
@@ -28,156 +31,222 @@ import {
   getEmptyDashboardPayload,
   parseDashboardPayload,
   runFullDashboardScan,
+  type IssueDetail,
 } from "../seo-dashboard-scan.server";
+import { resolveShopPlan } from "../plan-gate.server";
 import {
   AlertCircleIcon,
   CheckCircleIcon,
   InfoIcon,
   RefreshIcon,
   SearchIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
+  AlertTriangleIcon,
+  ImageIcon,
+  LinkIcon,
+  ContentIcon,
+  CodeIcon,
 } from "@shopify/polaris-icons";
 
-const GAUGE_CX = 100;
-const GAUGE_CY = 100;
-const GAUGE_R = 78;
+/* ──────────────────────── Gradient-fill arc meter ──────────────────────── */
 
-function polarOnGauge(r: number, angleRad: number) {
-  return {
-    x: GAUGE_CX + r * Math.cos(angleRad),
-    y: GAUGE_CY - r * Math.sin(angleRad),
-  };
+const ARC_CX = 120;
+const ARC_CY = 110;
+const ARC_R = 90;
+const ARC_STROKE = 16;
+
+function describeArc(cx: number, cy: number, r: number, startDeg: number, endDeg: number) {
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const x1 = cx + r * Math.cos(toRad(startDeg));
+  const y1 = cy + r * Math.sin(toRad(startDeg));
+  const x2 = cx + r * Math.cos(toRad(endDeg));
+  const y2 = cy + r * Math.sin(toRad(endDeg));
+  const largeArc = Math.abs(endDeg - startDeg) > 180 ? 1 : 0;
+  return `M ${x1} ${y1} A ${r} ${r} 0 ${largeArc} 1 ${x2} ${y2}`;
 }
 
-function gaugeArcD(r: number, startAngle: number, endAngle: number): string {
-  const s = polarOnGauge(r, startAngle);
-  const e = polarOnGauge(r, endAngle);
-  return `M ${s.x} ${s.y} A ${r} ${r} 0 0 1 ${e.x} ${e.y}`;
+function scoreColor(score: number): string {
+  if (score < 40) return "#d82c0d";
+  if (score < 70) return "#e49f0a";
+  return "#2e8e36";
 }
 
-function healthScoreFill(health: "Low" | "Medium" | "High"): string {
-  if (health === "Low") return "var(--p-color-text-critical)";
-  if (health === "Medium") return "var(--p-color-text-warning)";
+function healthLabelColor(label: string): string {
+  if (label === "Low") return "var(--p-color-text-critical)";
+  if (label === "Medium") return "var(--p-color-text-warning)";
   return "var(--p-color-text-success)";
 }
 
-/** Semi-circular meter: 0 = left, 100 = right. */
 function SeoScoreMeter({
   score,
   healthLabel,
+  animate,
 }: {
   score: number;
   healthLabel: "Low" | "Medium" | "High";
+  animate?: boolean;
 }) {
   const s = Math.max(0, Math.min(100, Math.round(score)));
-  const needleAngle = Math.PI * (1 - s / 100);
-  const tip = polarOnGauge(62, needleAngle);
-  const hubR = 5;
-  const r = GAUGE_R - 4;
-
-  const red = "var(--p-color-bg-fill-critical)";
-  const orange = "var(--p-color-bg-fill-warning)";
-  const green = "var(--p-color-bg-fill-success)";
-  const track = "var(--p-color-border-secondary)";
-  const scoreFill = healthScoreFill(healthLabel);
+  const arcLength = Math.PI * ARC_R;
+  const fillLength = (s / 100) * arcLength;
+  const dashOffset = arcLength - fillLength;
+  const color = scoreColor(s);
 
   return (
-    <svg
-      width="100%"
-      height={120}
-      viewBox="0 0 200 118"
-      style={{ maxWidth: 280, display: "block", margin: "0 auto" }}
-      role="img"
-      aria-label={`SEO score ${s} out of 100`}
-    >
-      <path
-        d={gaugeArcD(r, Math.PI, 0)}
-        fill="none"
-        stroke={track}
-        strokeWidth={10}
-        strokeLinecap="round"
-      />
-      <path
-        d={gaugeArcD(r, Math.PI, (2 * Math.PI) / 3)}
-        fill="none"
-        stroke={red}
-        strokeWidth={8}
-        strokeLinecap="butt"
-      />
-      <path
-        d={gaugeArcD(r, (2 * Math.PI) / 3, Math.PI / 3)}
-        fill="none"
-        stroke={orange}
-        strokeWidth={8}
-        strokeLinecap="butt"
-      />
-      <path
-        d={gaugeArcD(r, Math.PI / 3, 0)}
-        fill="none"
-        stroke={green}
-        strokeWidth={8}
-        strokeLinecap="butt"
-      />
-      <line
-        x1={GAUGE_CX}
-        y1={GAUGE_CY}
-        x2={tip.x}
-        y2={tip.y}
-        stroke="var(--p-color-text)"
-        strokeWidth={2.5}
-        strokeLinecap="round"
-      />
-      <circle
-        cx={GAUGE_CX}
-        cy={GAUGE_CY}
-        r={hubR}
-        fill="var(--p-color-bg-surface)"
-        stroke="var(--p-color-border)"
-        strokeWidth={1.5}
-      />
-      <text
-        x={GAUGE_CX}
-        y={58}
-        textAnchor="middle"
-        dominantBaseline="middle"
-        fill={scoreFill}
-        style={{
-          fontSize: 32,
-          fontWeight: 600,
-          fontFamily: "var(--p-font-family-sans)",
-        }}
+    <div style={{ textAlign: "center" }}>
+      <svg
+        width="240"
+        height="140"
+        viewBox="0 0 240 140"
+        style={{ display: "block", margin: "0 auto" }}
+        role="img"
+        aria-label={`SEO score ${s} out of 100`}
       >
-        {s}
-      </text>
-      <text
-        x={GAUGE_CX}
-        y={78}
-        textAnchor="middle"
-        fill="var(--p-color-text-secondary)"
-        style={{
-          fontSize: 12,
-          fontFamily: "var(--p-font-family-sans)",
-        }}
-      >
-        / 100
-      </text>
-    </svg>
+        {/* Track */}
+        <path
+          d={describeArc(ARC_CX, ARC_CY, ARC_R, 180, 360)}
+          fill="none"
+          stroke="var(--p-color-border-secondary)"
+          strokeWidth={ARC_STROKE}
+          strokeLinecap="round"
+        />
+        {/* Fill */}
+        <path
+          d={describeArc(ARC_CX, ARC_CY, ARC_R, 180, 360)}
+          fill="none"
+          stroke={color}
+          strokeWidth={ARC_STROKE}
+          strokeLinecap="round"
+          strokeDasharray={`${arcLength}`}
+          strokeDashoffset={dashOffset}
+          style={{
+            transition: animate ? "stroke-dashoffset 1.2s ease-out, stroke 0.6s ease" : "none",
+          }}
+        />
+        {/* Score */}
+        <text
+          x={ARC_CX}
+          y={ARC_CY - 18}
+          textAnchor="middle"
+          dominantBaseline="middle"
+          fill={color}
+          style={{ fontSize: 48, fontWeight: 700, fontFamily: "var(--p-font-family-sans)" }}
+        >
+          {s}
+        </text>
+        {/* / 100 */}
+        <text
+          x={ARC_CX}
+          y={ARC_CY + 12}
+          textAnchor="middle"
+          fill="var(--p-color-text-secondary)"
+          style={{ fontSize: 13, fontFamily: "var(--p-font-family-sans)" }}
+        >
+          / 100
+        </text>
+      </svg>
+      <Text as="p" variant="bodyMd" alignment="center">
+        SEO Health Score:{" "}
+        <span style={{ color: healthLabelColor(healthLabel), fontWeight: 700 }}>
+          {healthLabel}
+        </span>
+      </Text>
+    </div>
   );
 }
 
+/* ──────────────────────── Status messages during audit ──────────────────────── */
+
 const AUDIT_STATUS_MESSAGES = [
   "We're working on your audit…",
+  "Scanning products and pages…",
   "Calculating your SEO score…",
   "Gathering storefront issues…",
-  "Reading theme templates and live pages…",
+  "Reading theme templates…",
 ] as const;
 
+/* ──────────────────────── Collapsible issue row ──────────────────────── */
+
+function severityDot(severity: string): string {
+  if (severity === "critical") return "#d82c0d";
+  if (severity === "warning") return "#e49f0a";
+  return "#2e8e36";
+}
+
+function IssueRow({ issue }: { issue: IssueDetail }) {
+  const [open, setOpen] = useState(false);
+  const navigate = useNavigate();
+  return (
+    <div style={{ borderBottom: "1px solid var(--p-color-border-secondary)" }}>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          width: "100%",
+          padding: "12px 0",
+          background: "none",
+          border: "none",
+          cursor: "pointer",
+          textAlign: "left",
+          gap: "12px",
+        }}
+        type="button"
+      >
+        <span
+          style={{
+            width: 10,
+            height: 10,
+            borderRadius: "50%",
+            backgroundColor: severityDot(issue.severity),
+            flexShrink: 0,
+          }}
+        />
+        <span style={{ flex: 1 }}>
+          <Text as="span" variant="bodySm" fontWeight="semibold">
+            {issue.category}
+          </Text>
+          {"  "}
+          <Text as="span" variant="bodySm">
+            {issue.title}
+          </Text>
+        </span>
+        <Text as="span" variant="bodySm" tone="subdued">
+          {issue.count}
+        </Text>
+        <span style={{ display: "flex" }}>
+          <Icon source={open ? ChevronUpIcon : ChevronDownIcon} tone="subdued" />
+        </span>
+      </button>
+      <Collapsible open={open} id={`issue-${issue.title}`}>
+        <div style={{ padding: "0 0 12px 22px" }}>
+          <BlockStack gap="200">
+            <Text as="p" variant="bodySm" tone="subdued">
+              {issue.description}
+            </Text>
+            {issue.link && (
+              <Button size="slim" onClick={() => navigate(issue.link!)}>
+                Fix this
+              </Button>
+            )}
+          </BlockStack>
+        </div>
+      </Collapsible>
+    </div>
+  );
+}
+
+/* ──────────────────────── Loader & Action ──────────────────────── */
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { admin, session } = await authenticate.admin(request);
+  const { admin, session, billing } = await authenticate.admin(request);
+
+  const billingCheck = await billing.check();
+  const resolved = await resolveShopPlan(session.shop, billingCheck);
 
   const [snapshot, history, shopName] = await Promise.all([
-    prisma.dashboardSeoSnapshot.findUnique({
-      where: { shop: session.shop },
-    }),
+    prisma.dashboardSeoSnapshot.findUnique({ where: { shop: session.shop } }),
     prisma.auditHistory.findMany({
       where: { shop: session.shop },
       orderBy: { scannedAt: "asc" },
@@ -195,13 +264,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     shopName ||
     session.shop.replace(/\.myshopify\.com$/i, "").replace(/[-_]/g, " ");
 
-  return {
+  return json({
     hasCachedScan: !!snapshot,
     scannedAt: snapshot?.scannedAt?.toISOString() ?? null,
     shopDisplayName,
     history,
+    plan: resolved.plan,
+    isEarlyAdopter: resolved.isEarlyAdopter,
+    earlyAdopterSlotsLeft: resolved.earlyAdopterSlotsLeft,
     ...base,
-  };
+  });
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -215,13 +287,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const payload = await runFullDashboardScan(admin);
     await prisma.dashboardSeoSnapshot.upsert({
       where: { shop: session.shop },
-      create: {
-        shop: session.shop,
-        payload: JSON.parse(JSON.stringify(payload)),
-      },
-      update: {
-        payload: JSON.parse(JSON.stringify(payload)),
-      },
+      create: { shop: session.shop, payload: JSON.parse(JSON.stringify(payload)) },
+      update: { payload: JSON.parse(JSON.stringify(payload)) },
     });
 
     await prisma.auditHistory.create({
@@ -244,45 +311,55 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 };
 
+/* ──────────────────────── Page component ──────────────────────── */
+
 export default function Index() {
   const navigate = useNavigate();
+  const data = useLoaderData<typeof loader>();
   const {
     hasCachedScan,
     scannedAt,
     shopDisplayName,
     seoScore,
     healthLabel,
+    totalIssueSignals,
     metaIssuesCount,
     missingAltCount,
     brokenLinksCount,
     duplicateContentCount,
-    totalIssueSignals,
+    themeIssuesCount,
     history,
     scanSummary,
     pagesScanned,
     criticalIssue,
     needImprovement,
     goodResult,
-    themeIssuesCount,
-  } = useLoaderData<typeof loader>();
+    issues,
+    isEarlyAdopter,
+    earlyAdopterSlotsLeft,
+  } = data;
 
   const revalidator = useRevalidator();
   const fetcher = useFetcher<typeof action>();
-
   const isAuditing = fetcher.state !== "idle";
   const [statusIdx, setStatusIdx] = useState(0);
+  const [selectedTab, setSelectedTab] = useState(0);
+  const [animateMeter, setAnimateMeter] = useState(false);
 
   useEffect(() => {
     if (fetcher.state === "idle" && fetcher.data?.ok === true) {
       revalidator.revalidate();
+      setAnimateMeter(true);
     }
-  }, [fetcher.state, fetcher.data, revalidator]);
+  }, [fetcher.state, fetcher.data]);
 
   useEffect(() => {
-    if (!isAuditing) {
-      setStatusIdx(0);
-      return;
-    }
+    const t = setTimeout(() => setAnimateMeter(true), 200);
+    return () => clearTimeout(t);
+  }, []);
+
+  useEffect(() => {
+    if (!isAuditing) { setStatusIdx(0); return; }
     const t = setInterval(() => {
       setStatusIdx((i) => (i + 1) % AUDIT_STATUS_MESSAGES.length);
     }, 2200);
@@ -291,105 +368,28 @@ export default function Index() {
 
   const auditError =
     fetcher.state === "idle" && fetcher.data && !fetcher.data.ok
-      ? fetcher.data.error
+      ? (fetcher.data as { ok: false; error?: string }).error
       : null;
 
   const lastScanLabel = useMemo(() => {
     if (!scannedAt) return "No scan yet — run an audit to see live data.";
     try {
-      return new Date(scannedAt).toLocaleString(undefined, {
-        dateStyle: "medium",
-        timeStyle: "short",
-      });
-    } catch {
-      return scannedAt;
-    }
+      return new Date(scannedAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+    } catch { return scannedAt; }
   }, [scannedAt]);
 
-  const healthToneForLabel =
-    healthLabel === "Low"
-      ? "critical"
-      : healthLabel === "Medium"
-        ? "warning"
-        : "success";
+  const issuesList: IssueDetail[] = (issues ?? []) as IssueDetail[];
+  const criticalIssues = issuesList.filter((i) => i.severity === "critical");
+  const warningIssues = issuesList.filter((i) => i.severity === "warning");
+  const goodIssues = issuesList.filter((i) => i.severity === "good");
 
-  const healthIndicators = [
-    {
-      title: "Meta Issues",
-      count: metaIssuesCount,
-      status: metaIssuesCount > 0 ? "critical" : "success",
-      description: "Missing or duplicate titles/descriptions",
-      action: "Fix Meta Tags",
-      link: "/app/meta-tags",
-    },
-    {
-      title: "Missing Alt Texts",
-      count: missingAltCount,
-      status: missingAltCount > 0 ? "warning" : "success",
-      description: "Images without alt attributes",
-      action: "Optimize Images",
-      link: "/app/image-optimization",
-    },
-    {
-      title: "Broken Links",
-      count: brokenLinksCount,
-      status: brokenLinksCount > 0 ? "critical" : "success",
-      description: "404 errors found on site",
-      action: "Fix Links",
-      link: "/app/broken-links",
-    },
-    {
-      title: "Duplicate Content",
-      count: duplicateContentCount,
-      status: duplicateContentCount > 0 ? "warning" : "success",
-      description:
-        duplicateContentCount > 0
-          ? "Duplicate titles detected"
-          : "No duplicate content detected",
-      action: "View Report",
-      link: "/app/seo-audit",
-    },
+  const tabs = [
+    { id: "critical", content: `Critical Issue ${criticalIssue}`, badge: String(criticalIssue) },
+    { id: "need", content: `Need Improvement ${needImprovement}`, badge: String(needImprovement) },
+    { id: "good", content: `Good Result ${goodResult}`, badge: String(goodResult) },
   ];
 
-  const modules = [
-    { name: "SEO Audit", status: "Active" },
-    { name: "Meta Tags Manager", status: "Active" },
-    { name: "Image Alt Text", status: "Active" },
-    { name: "Image Compression", status: "Active" },
-    { name: "AI Content", status: "Active" },
-    { name: "LLMs SEO", status: "Active" },
-    { name: "Schema Markup", status: "Active" },
-    { name: "Internal Linking", status: "Active" },
-    { name: "Broken Links", status: "Active" },
-    { name: "Sitemap & Robots", status: "Active" },
-    { name: "Bulk Editor", status: "Active" },
-  ];
-
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "critical":
-        return <Badge tone="critical">Critical</Badge>;
-      case "warning":
-        return <Badge tone="warning">Warning</Badge>;
-      case "success":
-        return <Badge tone="success">Good</Badge>;
-      default:
-        return <Badge>Unknown</Badge>;
-    }
-  };
-
-  const getStatusIcon = (status: string) => {
-    switch (status) {
-      case "critical":
-        return <Icon source={AlertCircleIcon} tone="critical" />;
-      case "warning":
-        return <Icon source={InfoIcon} tone="warning" />;
-      case "success":
-        return <Icon source={CheckCircleIcon} tone="success" />;
-      default:
-        return null;
-    }
-  };
+  const activeIssueSet = selectedTab === 0 ? criticalIssues : selectedTab === 1 ? warningIssues : goodIssues;
 
   function metricCard(icon: ReactNode, title: string, value: number) {
     return (
@@ -397,13 +397,9 @@ export default function Index() {
         <BlockStack gap="200">
           <InlineStack gap="100" blockAlign="center" wrap={false}>
             <span style={{ display: "flex", flexShrink: 0 }}>{icon}</span>
-            <Text as="span" variant="bodySm" fontWeight="semibold">
-              {title}
-            </Text>
+            <Text as="span" variant="bodySm" fontWeight="semibold">{title}</Text>
           </InlineStack>
-          <Text as="p" variant="headingXl">
-            {value.toLocaleString()}
-          </Text>
+          <Text as="p" variant="headingXl">{value.toLocaleString()}</Text>
         </BlockStack>
       </Card>
     );
@@ -413,21 +409,29 @@ export default function Index() {
     <Page fullWidth>
       <TitleBar title="SEO Suite Dashboard" />
       <BlockStack gap="500">
-        {isAuditing ? (
-          <Banner tone="info">
+        {isEarlyAdopter && (
+          <Banner tone="success">
             <Text as="p" variant="bodyMd">
-              {AUDIT_STATUS_MESSAGES[statusIdx]}
+              Welcome, early adopter! You have free access to all Pro features.
+              {earlyAdopterSlotsLeft != null && earlyAdopterSlotsLeft > 0
+                ? ` Only ${earlyAdopterSlotsLeft} early adopter spots remaining — invite your friends!`
+                : ""}
             </Text>
           </Banner>
-        ) : null}
-        {auditError ? (
-          <Banner tone="critical">
-            <Text as="p" variant="bodyMd">
-              {auditError}
-            </Text>
-          </Banner>
-        ) : null}
+        )}
 
+        {isAuditing && (
+          <Banner tone="info">
+            <Text as="p" variant="bodyMd">{AUDIT_STATUS_MESSAGES[statusIdx]}</Text>
+          </Banner>
+        )}
+        {auditError && (
+          <Banner tone="critical">
+            <Text as="p" variant="bodyMd">{auditError}</Text>
+          </Banner>
+        )}
+
+        {/* ── Hero card ── */}
         <Layout>
           <Layout.Section>
             <Card padding="500">
@@ -437,72 +441,36 @@ export default function Index() {
                     <SeoScoreMeter
                       score={hasCachedScan ? seoScore : 0}
                       healthLabel={hasCachedScan ? healthLabel : "Low"}
+                      animate={animateMeter}
                     />
-                    <Text as="p" variant="bodyMd" alignment="center">
-                      SEO Health Score:{" "}
-                      <Text as="span" tone={healthToneForLabel} fontWeight="bold">
-                        {hasCachedScan ? healthLabel : "—"}
-                      </Text>
-                    </Text>
-                    <InlineStack gap="200" wrap>
+                    <InlineStack gap="200" wrap align="center">
                       {hasCachedScan ? (
                         <>
-                          <Button
-                            variant="primary"
-                            onClick={() => navigate("/app/meta-tags")}
-                          >
+                          <Button variant="primary" onClick={() => navigate("/app/meta-tags")}>
                             One-Click Fix
                           </Button>
                           <fetcher.Form method="post">
-                            <input
-                              type="hidden"
-                              name="intent"
-                              value="run_audit"
-                            />
-                            <Button
-                              submit
-                              variant="secondary"
-                              icon={RefreshIcon}
-                              loading={isAuditing}
-                            >
+                            <input type="hidden" name="intent" value="run_audit" />
+                            <Button submit variant="secondary" icon={RefreshIcon} loading={isAuditing}>
                               Rescan
                             </Button>
                           </fetcher.Form>
                         </>
                       ) : (
-                        <>
-                          <fetcher.Form method="post">
-                            <input
-                              type="hidden"
-                              name="intent"
-                              value="run_audit"
-                            />
-                            <Button
-                              submit
-                              variant="primary"
-                              icon={RefreshIcon}
-                              loading={isAuditing}
-                            >
-                              Run full audit
-                            </Button>
-                          </fetcher.Form>
-                          <Button
-                            variant="secondary"
-                            onClick={() => navigate("/app/meta-tags")}
-                          >
-                            One-Click Fix
+                        <fetcher.Form method="post">
+                          <input type="hidden" name="intent" value="run_audit" />
+                          <Button submit variant="primary" icon={RefreshIcon} loading={isAuditing}>
+                            Run full audit
                           </Button>
-                        </>
+                        </fetcher.Form>
                       )}
                     </InlineStack>
                   </BlockStack>
                 </Grid.Cell>
 
-                <Grid.Cell columnSpan={{ xs: 6, sm: 6, md: 8, lg: 8, xl: 8 }}>
+                <Grid.Cell columnSpan={{ xs: 6, sm: 6, md: 6, lg: 6, xl: 6 }}>
                   <BlockStack gap="400">
-                    <Text as="p" variant="headingLg">
-                      Hi, {shopDisplayName} 👋
-                    </Text>
+                    <Text as="p" variant="headingLg">Hi, {shopDisplayName} 👋</Text>
                     <Text as="p" variant="bodyLg">
                       {hasCachedScan ? (
                         <>
@@ -510,15 +478,10 @@ export default function Index() {
                           <Text as="span" tone="critical" fontWeight="bold">
                             {totalIssueSignals.toLocaleString()}
                           </Text>{" "}
-                          SEO issue
-                          {totalIssueSignals === 1 ? "" : "s"} affecting your
-                          store (catalog + live pages + theme files).
+                          SEO issues affecting your website rankings.
                         </>
                       ) : (
-                        <>
-                          Run a full audit to score SEO health across your
-                          catalog, key storefront URLs, and main theme templates.
-                        </>
+                        <>Run a full audit to score SEO health across your catalog, key storefront URLs, and main theme templates.</>
                       )}
                     </Text>
                     <Text as="p" variant="bodySm" tone="subdued">
@@ -526,113 +489,124 @@ export default function Index() {
                     </Text>
 
                     <Grid>
-                      <Grid.Cell
-                        columnSpan={{ xs: 6, sm: 6, md: 6, lg: 6, xl: 6 }}
-                      >
-                        {metricCard(
-                          <Icon source={SearchIcon} tone="subdued" />,
-                          "Pages scanned",
-                          hasCachedScan ? pagesScanned : 0,
-                        )}
+                      <Grid.Cell columnSpan={{ xs: 6, sm: 6, md: 6, lg: 6, xl: 6 }}>
+                        {metricCard(<Icon source={SearchIcon} tone="subdued" />, "Pages scanned", hasCachedScan ? pagesScanned : 0)}
                       </Grid.Cell>
-                      <Grid.Cell
-                        columnSpan={{ xs: 6, sm: 6, md: 6, lg: 6, xl: 6 }}
-                      >
-                        {metricCard(
-                          <Icon source={AlertCircleIcon} tone="critical" />,
-                          "Critical issues",
-                          hasCachedScan ? criticalIssue : 0,
-                        )}
+                      <Grid.Cell columnSpan={{ xs: 6, sm: 6, md: 6, lg: 6, xl: 6 }}>
+                        {metricCard(<Icon source={AlertCircleIcon} tone="critical" />, "Critical issues", hasCachedScan ? criticalIssue : 0)}
                       </Grid.Cell>
-                      <Grid.Cell
-                        columnSpan={{ xs: 6, sm: 6, md: 6, lg: 6, xl: 6 }}
-                      >
-                        {metricCard(
-                          <Icon source={InfoIcon} tone="warning" />,
-                          "Need improvement",
-                          hasCachedScan ? needImprovement : 0,
-                        )}
+                      <Grid.Cell columnSpan={{ xs: 6, sm: 6, md: 6, lg: 6, xl: 6 }}>
+                        {metricCard(<Icon source={InfoIcon} tone="warning" />, "Need improvement", hasCachedScan ? needImprovement : 0)}
                       </Grid.Cell>
-                      <Grid.Cell
-                        columnSpan={{ xs: 6, sm: 6, md: 6, lg: 6, xl: 6 }}
-                      >
-                        {metricCard(
-                          <Icon source={CheckCircleIcon} tone="success" />,
-                          "Good results",
-                          hasCachedScan ? goodResult : 0,
-                        )}
+                      <Grid.Cell columnSpan={{ xs: 6, sm: 6, md: 6, lg: 6, xl: 6 }}>
+                        {metricCard(<Icon source={CheckCircleIcon} tone="success" />, "Good results", hasCachedScan ? goodResult : 0)}
                       </Grid.Cell>
                     </Grid>
-
-                    <Text as="p" variant="bodySm" tone="subdued">
-                      {hasCachedScan
-                        ? `${scanSummary.productCount.toLocaleString()} products (${scanSummary.productImageCount.toLocaleString()} images), ${scanSummary.pageCount} pages, ${scanSummary.articleCount} articles (Admin API). Live URLs fetched: ${scanSummary.liveUrlsOk}/${scanSummary.liveUrls.length}. Theme ${scanSummary.themeName ? `"${scanSummary.themeName}"` : ""}: ${scanSummary.themeScanOk ? `${scanSummary.themeFilesRead} SEO-related file(s)` : scanSummary.themeScanError || "unavailable"}.`
-                        : "Cached results load instantly; use Rescan after you publish theme or content changes."}
-                    </Text>
                   </BlockStack>
                 </Grid.Cell>
               </Grid>
             </Card>
           </Layout.Section>
 
+          {/* ── Health indicator detail cards ── */}
+          {hasCachedScan && (
+            <Layout.Section>
+              <Grid>
+                <Grid.Cell columnSpan={{ xs: 6, sm: 4, md: 4, lg: 4, xl: 4 }}>
+                  {metricCard(<Icon source={AlertTriangleIcon} tone="warning" />, "Meta issues", metaIssuesCount)}
+                </Grid.Cell>
+                <Grid.Cell columnSpan={{ xs: 6, sm: 4, md: 4, lg: 4, xl: 4 }}>
+                  {metricCard(<Icon source={ImageIcon} tone="warning" />, "Missing alt text", missingAltCount)}
+                </Grid.Cell>
+                <Grid.Cell columnSpan={{ xs: 6, sm: 4, md: 4, lg: 4, xl: 4 }}>
+                  {metricCard(<Icon source={LinkIcon} tone="critical" />, "Broken links", brokenLinksCount)}
+                </Grid.Cell>
+                <Grid.Cell columnSpan={{ xs: 6, sm: 4, md: 4, lg: 4, xl: 4 }}>
+                  {metricCard(<Icon source={ContentIcon} tone="warning" />, "Duplicate content", duplicateContentCount)}
+                </Grid.Cell>
+                <Grid.Cell columnSpan={{ xs: 6, sm: 4, md: 4, lg: 4, xl: 4 }}>
+                  {metricCard(<Icon source={CodeIcon} tone="subdued" />, "Theme issues", themeIssuesCount)}
+                </Grid.Cell>
+                <Grid.Cell columnSpan={{ xs: 6, sm: 4, md: 4, lg: 4, xl: 4 }}>
+                  {metricCard(<Icon source={SearchIcon} tone="info" />, "Total issues", totalIssueSignals)}
+                </Grid.Cell>
+              </Grid>
+            </Layout.Section>
+          )}
+
+          {/* ── Tabbed issue accordion ── */}
+          {hasCachedScan && issuesList.length > 0 && (
+            <Layout.Section>
+              <Card>
+                <Tabs tabs={tabs} selected={selectedTab} onSelect={setSelectedTab}>
+                  <div style={{ padding: "16px 0" }}>
+                    {activeIssueSet.length === 0 ? (
+                      <Text as="p" variant="bodySm" tone="subdued" alignment="center">
+                        No issues in this category.
+                      </Text>
+                    ) : (
+                      activeIssueSet.map((issue, i) => <IssueRow key={i} issue={issue} />)
+                    )}
+                  </div>
+                </Tabs>
+              </Card>
+            </Layout.Section>
+          )}
+
+          {/* ── Historical analytics + Scan details ── */}
           <Layout.Section>
             <Grid>
               <Grid.Cell columnSpan={{ xs: 6, sm: 6, md: 6, lg: 6, xl: 6 }}>
                 <Card>
                   <BlockStack gap="400">
-                    <Text as="h2" variant="headingLg">
-                      Historical Analytics
-                    </Text>
-                    <Text as="p" tone="subdued">
-                      Your SEO progress over the last 7 audits.
-                    </Text>
-                    <div
-                      style={{
-                        display: "flex",
-                        alignItems: "flex-end",
-                        height: "100px",
-                        gap: "8px",
-                        paddingTop: "10px",
-                      }}
-                    >
+                    <Text as="h2" variant="headingLg">Historical Analytics</Text>
+                    <Text as="p" tone="subdued">Your SEO progress over the last 7 audits.</Text>
+                    <div style={{ position: "relative", height: 160 }}>
                       {history && history.length > 0 ? (
-                        history.map((audit: { score: number; scannedAt: string }, index: number) => (
-                          <div
-                            key={index}
-                            style={{
-                              display: "flex",
-                              flexDirection: "column",
-                              alignItems: "center",
-                              flex: 1,
-                            }}
-                          >
-                            <div
-                              style={{
-                                width: "100%",
-                                height: `${Math.max(10, audit.score)}%`,
-                                backgroundColor:
-                                  audit.score >= 80
-                                    ? "#2e8e36"
-                                    : audit.score >= 50
-                                      ? "#e49f0a"
-                                      : "#d82c0d",
-                                borderRadius: "4px 4px 0 0",
-                                transition: "height 0.5s ease-out",
-                              }}
-                            />
-                            <Text
-                              as="span"
-                              variant="bodySm"
-                              tone="subdued"
-                              alignment="center"
-                            >
-                              {new Date(audit.scannedAt).toLocaleDateString(
-                                undefined,
-                                { month: "short", day: "numeric" },
-                              )}
-                            </Text>
-                          </div>
-                        ))
+                        <div
+                          style={{
+                            display: "flex",
+                            alignItems: "flex-end",
+                            gap: 8,
+                            height: 130,
+                            paddingBottom: 0,
+                          }}
+                        >
+                          {history.map((audit: { score: number; scannedAt: string }, index: number) => {
+                            const barHeight = Math.max(8, Math.round((audit.score / 100) * 120));
+                            return (
+                              <div
+                                key={index}
+                                style={{
+                                  display: "flex",
+                                  flexDirection: "column",
+                                  alignItems: "center",
+                                  flex: 1,
+                                  minWidth: 0,
+                                }}
+                              >
+                                <Text as="span" variant="bodySm" fontWeight="semibold" alignment="center">
+                                  {audit.score}
+                                </Text>
+                                <div
+                                  style={{
+                                    width: "100%",
+                                    maxWidth: 48,
+                                    height: barHeight,
+                                    backgroundColor:
+                                      audit.score >= 80
+                                        ? "#2e8e36"
+                                        : audit.score >= 50
+                                          ? "#e49f0a"
+                                          : "#d82c0d",
+                                    borderRadius: "4px 4px 0 0",
+                                    transition: "height 0.5s ease-out",
+                                  }}
+                                />
+                              </div>
+                            );
+                          })}
+                        </div>
                       ) : (
                         <div
                           style={{
@@ -648,6 +622,21 @@ export default function Index() {
                           </Text>
                         </div>
                       )}
+                      {/* Date labels */}
+                      {history && history.length > 0 && (
+                        <div style={{ display: "flex", gap: 8, paddingTop: 4 }}>
+                          {history.map((audit: { score: number; scannedAt: string }, index: number) => (
+                            <div key={index} style={{ flex: 1, textAlign: "center" }}>
+                              <Text as="span" variant="bodySm" tone="subdued">
+                                {new Date(audit.scannedAt).toLocaleDateString(undefined, {
+                                  month: "short",
+                                  day: "numeric",
+                                })}
+                              </Text>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   </BlockStack>
                 </Card>
@@ -655,113 +644,38 @@ export default function Index() {
               <Grid.Cell columnSpan={{ xs: 6, sm: 6, md: 6, lg: 6, xl: 6 }}>
                 <Card>
                   <BlockStack gap="300">
-                    <Text as="h3" variant="headingMd">
-                      Theme & live checks
-                    </Text>
-                    <Text as="p" variant="bodySm" tone="subdued">
-                      Viewport and lazy-loading hints are sampled from your main
-                      theme JSON/Liquid. Live fetches cover home, products,
-                      collections, FAQ/about-style pages, and blog URLs when
-                      present.
-                    </Text>
-                    {!hasCachedScan ? (
-                      <Text as="p" variant="bodySm" tone="subdued">
-                        Run an audit to evaluate viewport and lazy-loading hints
-                        from your main theme.
-                      </Text>
-                    ) : themeIssuesCount > 0 ? (
-                      <Text as="p" variant="bodySm" tone="critical">
-                        Theme: missing viewport meta in sampled files — fix in{" "}
-                        <Text
-                          as="span"
-                          variant="bodySm"
-                          fontWeight="semibold"
-                        >
-                          theme.liquid
-                        </Text>{" "}
-                        or theme settings.
-                      </Text>
+                    <Text as="h3" variant="headingMd">Scan details</Text>
+                    {hasCachedScan ? (
+                      <BlockStack gap="200">
+                        <InlineStack gap="200">
+                          <Badge>{`Products: ${scanSummary.productCount}`}</Badge>
+                          <Badge>{`Images: ${scanSummary.productImageCount}`}</Badge>
+                          <Badge>{`Pages: ${scanSummary.pageCount}`}</Badge>
+                          <Badge>{`Articles: ${scanSummary.articleCount}`}</Badge>
+                        </InlineStack>
+                        <Text as="p" variant="bodySm" tone="subdued">
+                          Live URLs: {scanSummary.liveUrlsOk} ok / {scanSummary.liveUrls.length} total.
+                          {scanSummary.collectionSampleCount > 0 &&
+                            ` Collections sampled: ${scanSummary.collectionSampleCount}.`}
+                          {scanSummary.blogSampleCount > 0 &&
+                            ` Blog articles sampled: ${scanSummary.blogSampleCount}.`}
+                        </Text>
+                        <Text as="p" variant="bodySm" tone="subdued">
+                          Theme{scanSummary.themeName ? ` "${scanSummary.themeName}"` : ""}:{" "}
+                          {scanSummary.themeScanOk
+                            ? `${scanSummary.themeFilesRead} SEO files read`
+                            : scanSummary.themeScanError || "unavailable"}
+                        </Text>
+                      </BlockStack>
                     ) : (
-                      <Text as="p" variant="bodySm" tone="success">
-                        No viewport warning from the sampled theme files.
+                      <Text as="p" variant="bodySm" tone="subdued">
+                        Run an audit to see detailed scan breakdown.
                       </Text>
                     )}
                   </BlockStack>
                 </Card>
               </Grid.Cell>
             </Grid>
-          </Layout.Section>
-
-          <Layout.Section>
-            <Text as="h3" variant="headingMd">
-              Health Indicators
-            </Text>
-            <div style={{ marginTop: "16px" }}>
-              <Grid>
-                {healthIndicators.map((item, index) => (
-                  <Grid.Cell
-                    key={index}
-                    columnSpan={{ xs: 6, sm: 6, md: 3, lg: 3, xl: 3 }}
-                  >
-                    <Card>
-                      <BlockStack gap="300">
-                        <InlineStack gap="200" blockAlign="center" wrap={false}>
-                          <Text as="h4" variant="headingSm">
-                            {item.title}
-                          </Text>
-                          {getStatusIcon(item.status)}
-                        </InlineStack>
-
-                        <InlineStack align="start" blockAlign="center" gap="200">
-                          <Text as="p" variant="headingLg">
-                            {item.count}
-                          </Text>
-                          {getStatusBadge(item.status)}
-                        </InlineStack>
-
-                        <Text as="p" tone="subdued">
-                          {item.description}
-                        </Text>
-
-                        <Button
-                          onClick={() => navigate(item.link)}
-                          disabled={item.status === "success"}
-                        >
-                          {item.action}
-                        </Button>
-                      </BlockStack>
-                    </Card>
-                  </Grid.Cell>
-                ))}
-              </Grid>
-            </div>
-          </Layout.Section>
-
-          <Layout.Section>
-            <Card>
-              <BlockStack gap="400">
-                <Text as="h3" variant="headingMd">
-                  Module Status
-                </Text>
-                <Grid>
-                  {modules.map((mod, index) => (
-                    <Grid.Cell
-                      key={index}
-                      columnSpan={{ xs: 6, sm: 4, md: 4, lg: 4, xl: 4 }}
-                    >
-                      <InlineStack align="space-between" blockAlign="center">
-                        <Text as="p" fontWeight="bold">
-                          {mod.name}
-                        </Text>
-                        <Badge tone={mod.status === "Active" ? "success" : "new"}>
-                          {mod.status}
-                        </Badge>
-                      </InlineStack>
-                    </Grid.Cell>
-                  ))}
-                </Grid>
-              </BlockStack>
-            </Card>
           </Layout.Section>
         </Layout>
       </BlockStack>

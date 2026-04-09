@@ -34,15 +34,21 @@ model Session {
 }
 
 model StoreSettings {
-  id                String   @id @default(uuid())
-  shop              String   @unique
-  plan              String   @default("free") // free, basic, pro, advanced
-  aiTokensUsed      Int      @default(0)
-  aiTokensLimit     Int      @default(100)
-  customPromptTone  String?  @default("persuasive")
-  autoFixEnabled    Boolean  @default(false)
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  id                    String    @id @default(uuid())
+  shop                  String    @unique
+  plan                  String    @default("free") // free, pro, premium
+  earlyAdopter          Boolean   @default(false)
+  earlyAdopterGrantedAt DateTime?
+  aiTokensUsed          Int       @default(0)
+  aiTokensLimit         Int       @default(100)
+  aiUsageCount          Int       @default(0)
+  compressionCount      Int       @default(0)
+  blogPostCount         Int       @default(0)
+  usageResetAt          DateTime  @default(now())
+  customPromptTone      String?   @default("persuasive")
+  autoFixEnabled        Boolean   @default(false)
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
 }
 
 model AuditHistory {

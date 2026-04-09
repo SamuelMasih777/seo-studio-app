@@ -36,6 +36,8 @@ import {
   isGeminiConfigured,
   plainTextProductDescriptionToHtml,
 } from "../gemini-content.server";
+import { resolvePromptForShop } from "../prompt-resolver.server";
+import prisma from "../db.server";
 
 type ContentLengthOption = "short" | "medium" | "long";
 
@@ -62,7 +64,7 @@ function stripHtmlToPlain(html: string): string {
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { admin } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   const url = new URL(request.url);
   
   const cursor = url.searchParams.get("cursor");
@@ -96,6 +98,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const json = await response.json();
   const productsConnection = json.data?.products;
+
+  let promptTemplates: { id: string; name: string; isDefault: boolean }[] = [];
+  try {
+    promptTemplates = await prisma.aIPromptTemplate.findMany({
+      where: { shop: session.shop },
+      select: { id: true, name: true, isDefault: true },
+      orderBy: { createdAt: "desc" },
+    });
+  } catch {}
+
   if (!productsConnection?.edges) {
     console.error(
       "[content-optimization] products query missing data",
@@ -110,6 +122,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         endCursor: null,
       },
       generationConfigured: isGeminiConfigured(),
+      promptTemplates,
     };
   }
 
@@ -117,6 +130,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     products: productsConnection.edges.map((e: any) => e.node),
     pageInfo: productsConnection.pageInfo,
     generationConfigured: isGeminiConfigured(),
+    promptTemplates,
   };
 };
 
@@ -126,7 +140,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const intent = formData.get("intent") as string;
 
     if (intent === "bulk_preview") {
-      const { admin } = await authenticate.admin(request);
+      const { admin, session } = await authenticate.admin(request);
       let selectedIds: string[];
       try {
         selectedIds = JSON.parse(formData.get("selectedIds") as string) as string[];
@@ -136,6 +150,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const tone = (formData.get("tone") as string) || "persuasive";
       const length = (formData.get("length") as ContentLengthOption) || "medium";
       const audienceHint = (formData.get("audienceHint") as string) || "";
+      const templateId = (formData.get("templateId") as string) || "";
 
       if (!isGeminiConfigured()) {
         return {
@@ -168,6 +183,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         const productTitle = product?.title || "Product";
         const originalPlain = stripHtmlToPlain(product?.descriptionHtml || "");
 
+        const customPrompt = await resolvePromptForShop(session.shop, {
+          product_title: productTitle,
+          product_description: originalPlain,
+          tone,
+        }, templateId || undefined);
+
         const gen = await generateProductDescriptionPlain({
           productTitle,
           targetKeyword: productTitle,
@@ -175,6 +196,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           length,
           audienceHint: audienceHint || undefined,
           originalDescriptionPlain: originalPlain || undefined,
+          customPrompt,
         });
 
         if (!gen.ok) {
@@ -256,7 +278,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     if (intent === "generate") {
-      await authenticate.admin(request);
+      const { session } = await authenticate.admin(request);
 
       if (!isGeminiConfigured()) {
         return {
@@ -270,6 +292,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const tone = (formData.get("tone") as string) || "persuasive";
       const length = (formData.get("length") as ContentLengthOption) || "medium";
       const audienceHint = (formData.get("audienceHint") as string) || "";
+      const templateId = (formData.get("templateId") as string) || "";
       const productTitle =
         (formData.get("productTitle") as string) || keyword || "Product";
       const original = (formData.get("original") as string) || "";
@@ -281,6 +304,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         };
       }
 
+      const customPrompt = await resolvePromptForShop(session.shop, {
+        product_title: productTitle,
+        product_description: original,
+        tone,
+        keyword: keyword.trim(),
+      }, templateId || undefined);
+
       const gen = await generateProductDescriptionPlain({
         productTitle,
         targetKeyword: keyword.trim(),
@@ -288,6 +318,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         length,
         audienceHint: audienceHint.trim() || undefined,
         originalDescriptionPlain: original.trim() || undefined,
+        customPrompt,
       });
 
       if (!gen.ok) {
@@ -399,10 +430,12 @@ export function ErrorBoundary() {
 }
 
 export default function ContentOptimizationPage() {
-  const { products, pageInfo, generationConfigured } = useLoaderData<typeof loader>();
+  const { products, pageInfo, generationConfigured, promptTemplates } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<typeof action>();
   const navigate = useNavigate();
 
+  const defaultTplId = promptTemplates.find((t: any) => t.isDefault)?.id || "";
+  const [selectedTemplateId, setSelectedTemplateId] = useState(defaultTplId);
   const [selectedProduct, setSelectedProduct] = useState<any>(null);
   const {
     selectedResources,
@@ -547,6 +580,7 @@ export default function ContentOptimizationPage() {
         audienceHint,
         productTitle: selectedProduct?.title || "",
         original: originalContent,
+        templateId: selectedTemplateId,
       },
       { method: "POST" },
     );
@@ -572,6 +606,7 @@ export default function ContentOptimizationPage() {
         tone: bulkTone,
         length: bulkLength,
         audienceHint: bulkAudienceHint,
+        templateId: selectedTemplateId,
       },
       { method: "POST" },
     );
@@ -714,6 +749,30 @@ export default function ContentOptimizationPage() {
               </Banner>
             </Layout.Section>
           )}
+
+          <Layout.Section>
+            <InlineStack gap="300" blockAlign="end">
+              <div style={{ minWidth: 220 }}>
+                <Select
+                  label="AI Prompt Template"
+                  options={[
+                    { label: "Built-in (default)", value: "" },
+                    ...promptTemplates.map((t: any) => ({
+                      label: `${t.name}${t.isDefault ? " ★" : ""}`,
+                      value: t.id,
+                    })),
+                  ]}
+                  value={selectedTemplateId}
+                  onChange={setSelectedTemplateId}
+                />
+              </div>
+              <Text as="p" variant="bodySm" tone="subdued">
+                {selectedTemplateId
+                  ? "Using custom template for AI generation"
+                  : "Using built-in prompts"}
+              </Text>
+            </InlineStack>
+          </Layout.Section>
 
           {showBanner.show && (
             <Layout.Section>

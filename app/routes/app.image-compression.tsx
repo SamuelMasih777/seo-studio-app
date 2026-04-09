@@ -16,6 +16,8 @@ import {
   IndexTable,
   useIndexResourceState,
   Select,
+  Tabs,
+  Grid,
 } from "@shopify/polaris";
 import { TitleBar } from "@shopify/app-bridge-react";
 import { PlayIcon } from "@shopify/polaris-icons";
@@ -119,6 +121,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin } = await authenticate.admin(request);
   const url = new URL(request.url);
 
+  const tab = url.searchParams.get("tab") || "product";
   const cursor = url.searchParams.get("cursor");
   const direction = url.searchParams.get("direction") || "next";
 
@@ -128,45 +131,116 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     return `first: 20, after: "${cursor}"`;
   };
 
-  const response = await admin.graphql(
-    `#graphql
-    query getProductImagesCompression {
-      products(${getArgs()}) {
-        pageInfo { hasNextPage, hasPreviousPage, startCursor, endCursor }
-        edges {
-          node {
-            id
-            title
-            images(first: 5) {
-              edges {
-                node {
-                  id
-                  url
-                  altText
-                  width
-                  height
+  const images: any[] = [];
+  let pageInfo = { hasNextPage: false, hasPreviousPage: false, startCursor: "", endCursor: "" };
+
+  if (tab === "collection") {
+    const response = await admin.graphql(
+      `#graphql
+      query getCollectionImages {
+        collections(${getArgs()}) {
+          pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+          edges {
+            node {
+              id
+              title
+              image { url altText width height }
+            }
+          }
+        }
+      }`,
+    );
+    const json = await response.json();
+    pageInfo = json.data.collections.pageInfo;
+    for (const edge of json.data.collections.edges) {
+      const c = edge.node;
+      if (c.image?.url) {
+        images.push({
+          id: c.id + "-img",
+          url: c.image.url,
+          altText: c.image.altText,
+          width: c.image.width,
+          height: c.image.height,
+          productId: c.id,
+          productTitle: c.title,
+          sourceType: "collection",
+        });
+      }
+    }
+  } else if (tab === "blog") {
+    const response = await admin.graphql(
+      `#graphql
+      query getBlogArticleImages {
+        articles(${getArgs()}) {
+          pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+          edges {
+            node {
+              id
+              title
+              image { url altText width height }
+              blog { title }
+            }
+          }
+        }
+      }`,
+    );
+    const json = await response.json();
+    pageInfo = json.data.articles.pageInfo;
+    for (const edge of json.data.articles.edges) {
+      const a = edge.node;
+      if (a.image?.url) {
+        images.push({
+          id: a.id + "-img",
+          url: a.image.url,
+          altText: a.image.altText,
+          width: a.image.width,
+          height: a.image.height,
+          productId: a.id,
+          productTitle: `${a.title} (${a.blog?.title || "Blog"})`,
+          sourceType: "article",
+        });
+      }
+    }
+  } else {
+    const response = await admin.graphql(
+      `#graphql
+      query getProductImagesCompression {
+        products(${getArgs()}) {
+          pageInfo { hasNextPage, hasPreviousPage, startCursor, endCursor }
+          edges {
+            node {
+              id
+              title
+              images(first: 5) {
+                edges {
+                  node {
+                    id
+                    url
+                    altText
+                    width
+                    height
+                  }
                 }
               }
             }
           }
         }
-      }
-    }`,
-  );
-
-  const json = await response.json();
-
-  const images: any[] = [];
-  json.data.products.edges.forEach((productEdge: any) => {
-    const product = productEdge.node;
-    product.images.edges.forEach((imageEdge: any) => {
-      images.push({
-        ...imageEdge.node,
-        productId: product.id,
-        productTitle: product.title,
+      }`,
+    );
+    const json = await response.json();
+    pageInfo = json.data.products.pageInfo;
+    json.data.products.edges.forEach((productEdge: any) => {
+      const product = productEdge.node;
+      product.images.edges.forEach((imageEdge: any) => {
+        images.push({
+          ...imageEdge.node,
+          productId: product.id,
+          productTitle: product.title,
+          sourceType: "product",
+        });
       });
     });
-  });
+  }
 
   const currentBytesList = await mapWithConcurrency(
     images,
@@ -177,9 +251,19 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     img.currentBytes = currentBytesList[i];
   });
 
+  const totalBytes = images.reduce(
+    (sum: number, img: any) => sum + (img.currentBytes || 0),
+    0,
+  );
+
   return {
     images,
-    pageInfo: json.data.products.pageInfo,
+    pageInfo,
+    activeTab: tab,
+    stats: {
+      totalImages: images.length,
+      totalBytes,
+    },
   };
 };
 
@@ -295,10 +379,22 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   };
 };
 
+const IMAGE_TABS = [
+  { id: "product", content: "Product" },
+  { id: "collection", content: "Collection" },
+  { id: "blog", content: "Blog" },
+];
+
 export default function ImageCompressionPage() {
-  const { images, pageInfo } = useLoaderData<typeof loader>();
+  const { images, pageInfo, activeTab, stats } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<ImageCompressionActionJson>();
   const navigate = useNavigate();
+
+  const selectedTabIndex = IMAGE_TABS.findIndex((t) => t.id === activeTab);
+  const handleTabChange = (index: number) => {
+    const tab = IMAGE_TABS[index].id;
+    navigate(`?tab=${tab}`);
+  };
 
   const [format, setFormat] = useState("webp");
   const [quality, setQuality] = useState("lossy");
@@ -460,11 +556,49 @@ export default function ImageCompressionPage() {
       ? (showBanner.savedBytes / (1024 * 1024)).toFixed(2)
       : "0";
 
+  const statsTotalMb = stats.totalBytes > 0
+    ? (stats.totalBytes / (1024 * 1024)).toFixed(1)
+    : "0";
+
   return (
     <Page>
       <TitleBar title="Image Compression" />
       <BlockStack gap="500">
         <Layout>
+          {/* Stats header */}
+          <Layout.Section>
+            <Grid>
+              <Grid.Cell columnSpan={{ xs: 6, sm: 4, md: 4, lg: 4, xl: 4 }}>
+                <Card>
+                  <BlockStack gap="100">
+                    <Text as="p" variant="bodySm" tone="subdued">Total Images</Text>
+                    <Text as="p" variant="headingLg">{stats.totalImages}</Text>
+                  </BlockStack>
+                </Card>
+              </Grid.Cell>
+              <Grid.Cell columnSpan={{ xs: 6, sm: 4, md: 4, lg: 4, xl: 4 }}>
+                <Card>
+                  <BlockStack gap="100">
+                    <Text as="p" variant="bodySm" tone="subdued">Total Size (this page)</Text>
+                    <Text as="p" variant="headingLg">{statsTotalMb} MB</Text>
+                  </BlockStack>
+                </Card>
+              </Grid.Cell>
+              <Grid.Cell columnSpan={{ xs: 6, sm: 4, md: 4, lg: 4, xl: 4 }}>
+                <Card>
+                  <BlockStack gap="100">
+                    <Text as="p" variant="bodySm" tone="subdued">Compression Savings</Text>
+                    <Text as="p" variant="headingLg">
+                      {showBanner.show && showBanner.savedBytes > 0
+                        ? `${(showBanner.savedBytes / (1024 * 1024)).toFixed(2)} MB`
+                        : "Run to see"}
+                    </Text>
+                  </BlockStack>
+                </Card>
+              </Grid.Cell>
+            </Grid>
+          </Layout.Section>
+
           {errorBanner && (
             <Layout.Section>
               <Banner
@@ -561,30 +695,34 @@ export default function ImageCompressionPage() {
 
           <Layout.Section>
             <Card padding="0">
-              <IndexTable
-                resourceName={{ singular: "image", plural: "images" }}
-                itemCount={images.length}
-                selectedItemsCount={
-                  allResourcesSelected ? "All" : selectedResources.length
-                }
-                onSelectionChange={handleSelectionChange}
-                promotedBulkActions={promotedBulkActions}
-                headings={[
-                  { title: "Preview" },
-                  { title: "Product / size" },
-                  { title: "Current file size" },
-                  { title: "Est. compressed" },
-                  { title: "Status" },
-                ]}
-                pagination={{
-                  hasNext: pageInfo.hasNextPage,
-                  hasPrevious: pageInfo.hasPreviousPage,
-                  onNext: handleNextPage,
-                  onPrevious: handlePrevPage,
-                }}
-              >
-                {rowMarkup}
-              </IndexTable>
+              <Tabs tabs={IMAGE_TABS} selected={selectedTabIndex >= 0 ? selectedTabIndex : 0} onSelect={handleTabChange}>
+                <div style={{ padding: 0 }}>
+                  <IndexTable
+                    resourceName={{ singular: "image", plural: "images" }}
+                    itemCount={images.length}
+                    selectedItemsCount={
+                      allResourcesSelected ? "All" : selectedResources.length
+                    }
+                    onSelectionChange={handleSelectionChange}
+                    promotedBulkActions={promotedBulkActions}
+                    headings={[
+                      { title: "Preview" },
+                      { title: "Source / size" },
+                      { title: "Current file size" },
+                      { title: "Est. compressed" },
+                      { title: "Status" },
+                    ]}
+                    pagination={{
+                      hasNext: pageInfo.hasNextPage,
+                      hasPrevious: pageInfo.hasPreviousPage,
+                      onNext: handleNextPage,
+                      onPrevious: handlePrevPage,
+                    }}
+                  >
+                    {rowMarkup}
+                  </IndexTable>
+                </div>
+              </Tabs>
             </Card>
           </Layout.Section>
         </Layout>

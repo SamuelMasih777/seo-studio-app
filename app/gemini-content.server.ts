@@ -113,6 +113,7 @@ export async function generateProductDescriptionPlain(input: {
   length: ContentLengthOption;
   audienceHint?: string;
   originalDescriptionPlain?: string;
+  customPrompt?: string | null;
 }): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
   const apiKey = getGeminiApiKey();
   if (!apiKey) {
@@ -123,6 +124,8 @@ export async function generateProductDescriptionPlain(input: {
     };
   }
 
+  const promptText = input.customPrompt || buildUserPrompt(input);
+
   const model = resolveGeminiModelId();
   const url = `${API_BASE}/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
@@ -130,7 +133,7 @@ export async function generateProductDescriptionPlain(input: {
     contents: [
       {
         role: "user",
-        parts: [{ text: buildUserPrompt(input) }],
+        parts: [{ text: promptText }],
       },
     ],
     generationConfig: {
@@ -212,6 +215,7 @@ function buildImageAltPrompt(input: {
 export async function generateProductImageAltPlain(input: {
   productTitle: string;
   existingAlt?: string;
+  customPrompt?: string | null;
 }): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
   const apiKey = getGeminiApiKey();
   if (!apiKey) {
@@ -222,6 +226,8 @@ export async function generateProductImageAltPlain(input: {
     };
   }
 
+  const promptText = input.customPrompt || buildImageAltPrompt(input);
+
   const model = resolveGeminiModelId();
   const url = `${API_BASE}/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
@@ -229,7 +235,7 @@ export async function generateProductImageAltPlain(input: {
     contents: [
       {
         role: "user",
-        parts: [{ text: buildImageAltPrompt(input) }],
+        parts: [{ text: promptText }],
       },
     ],
     generationConfig: {
@@ -284,6 +290,164 @@ export async function generateProductImageAltPlain(input: {
 
   const oneLine = text.replace(/\s+/g, " ").trim().slice(0, 512);
   return { ok: true, text: oneLine };
+}
+
+/* ──────────────────── Blog outline + post generation ──────────────────── */
+
+export async function generateBlogOutline(input: {
+  topic: string;
+  tone: string;
+  keywords: string[];
+  customPrompt?: string | null;
+}): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
+  const apiKey = getGeminiApiKey();
+  if (!apiKey) return { ok: false, error: "AI not configured (missing API key)." };
+
+  if (input.customPrompt) {
+    return callGemini(input.customPrompt, { temperature: 0.7, maxOutputTokens: 2048 });
+  }
+
+  const prompt = [
+    `Create a detailed blog post outline for a Shopify store blog.`,
+    ``,
+    `Topic: ${input.topic}`,
+    `Tone: ${input.tone}`,
+    `SEO keywords to naturally include: ${input.keywords.join(", ") || input.topic}`,
+    ``,
+    `Output a structured outline with:`,
+    `- A suggested blog title (H1)`,
+    `- Introduction summary (2 sentences)`,
+    `- 4-6 H2 sections, each with 2-3 bullet points of what to cover`,
+    `- A FAQ section with 3-4 questions`,
+    `- Conclusion summary`,
+    ``,
+    `Plain text only, use "## " for H2 headings, "- " for bullets, "### FAQ" for FAQ section.`,
+    `No HTML, no markdown links.`,
+  ].join("\n");
+
+  return callGemini(prompt, { temperature: 0.7, maxOutputTokens: 2048 });
+}
+
+export async function generateBlogPost(input: {
+  outline: string;
+  topic: string;
+  tone: string;
+  targetLength: "short" | "medium" | "long";
+  customPrompt?: string | null;
+}): Promise<
+  | { ok: true; title: string; body: string; metaDescription: string }
+  | { ok: false; error: string }
+> {
+  const apiKey = getGeminiApiKey();
+  if (!apiKey) return { ok: false, error: "AI not configured (missing API key)." };
+
+  if (input.customPrompt) {
+    const result = await callGemini(input.customPrompt, { temperature: 0.7, maxOutputTokens: 8192 });
+    if (!result.ok) return result;
+    const text = result.text;
+    const titleMatch = text.match(/---TITLE---\s*([\s\S]*?)---META---/);
+    const metaMatch = text.match(/---META---\s*([\s\S]*?)---BODY---/);
+    const bodyMatch = text.match(/---BODY---\s*([\s\S]*)/);
+    return {
+      ok: true,
+      title: titleMatch?.[1]?.trim() || input.topic,
+      body: bodyMatch?.[1]?.trim() || text,
+      metaDescription: metaMatch?.[1]?.trim().slice(0, 320) || `Read about ${input.topic}`,
+    };
+  }
+
+  const lengthGuide =
+    input.targetLength === "short"
+      ? "600-900 words"
+      : input.targetLength === "long"
+        ? "1500-2200 words"
+        : "900-1400 words";
+
+  const prompt = [
+    `Write a complete SEO-optimized blog post for a Shopify store.`,
+    ``,
+    `Topic: ${input.topic}`,
+    `Tone: ${input.tone}`,
+    `Target length: ${lengthGuide}`,
+    ``,
+    `Follow this outline closely:`,
+    input.outline,
+    ``,
+    `Output format (STRICTLY follow this, using the exact delimiter lines):`,
+    `---TITLE---`,
+    `The blog post title here`,
+    `---META---`,
+    `A 150-160 character meta description with the primary keyword`,
+    `---BODY---`,
+    `The full blog post in HTML. Use <h2> for sections, <h3> for sub-sections,`,
+    `<p> for paragraphs, <ul>/<li> for lists, <strong> for emphasis.`,
+    `Do not include <h1> (the title is separate). No inline styles.`,
+    `Include a FAQ section using <h2>FAQ</h2> with <h3> for each question.`,
+  ].join("\n");
+
+  const result = await callGemini(prompt, {
+    temperature: 0.7,
+    maxOutputTokens: 8192,
+  });
+
+  if (!result.ok) return result;
+
+  const text = result.text;
+  const titleMatch = text.match(/---TITLE---\s*([\s\S]*?)---META---/);
+  const metaMatch = text.match(/---META---\s*([\s\S]*?)---BODY---/);
+  const bodyMatch = text.match(/---BODY---\s*([\s\S]*)/);
+
+  const title = titleMatch?.[1]?.trim() || input.topic;
+  const metaDescription =
+    metaMatch?.[1]?.trim().slice(0, 320) ||
+    `Read about ${input.topic} on our blog.`;
+  const body = bodyMatch?.[1]?.trim() || text;
+
+  return { ok: true, title, body, metaDescription };
+}
+
+async function callGemini(
+  prompt: string,
+  config: { temperature: number; maxOutputTokens: number },
+): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
+  const apiKey = getGeminiApiKey()!;
+  const model = resolveGeminiModelId();
+  const url = `${API_BASE}/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
+
+  const body = {
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    generationConfig: config,
+  };
+
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(180_000),
+    });
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "AI request failed." };
+  }
+
+  const raw = await res.text();
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch {
+    return { ok: false, error: `Unexpected AI response (${res.status}).` };
+  }
+
+  if (!res.ok) {
+    const msg = (json as GeminiErrorBody).error?.message || raw.slice(0, 200);
+    return { ok: false, error: `AI failed (${res.status}): ${msg}` };
+  }
+
+  const text = extractTextFromResponse(json);
+  if (!text) return { ok: false, error: "No AI content returned (possibly blocked)." };
+
+  return { ok: true, text };
 }
 
 /** Convert plain text with blank-line paragraphs into simple safe HTML for Shopify descriptionHtml. */

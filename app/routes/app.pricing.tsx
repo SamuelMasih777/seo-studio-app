@@ -1,5 +1,5 @@
-import { useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
+import { json } from "@remix-run/node";
 import { useLoaderData, useFetcher } from "@remix-run/react";
 import {
   Page,
@@ -12,69 +12,94 @@ import {
   Grid,
   Badge,
   List,
+  Banner,
+  Divider,
+  Icon,
 } from "@shopify/polaris";
 import { TitleBar } from "@shopify/app-bridge-react";
-import { authenticate } from "../shopify.server";
-import prisma from "../db.server";
+import { CheckCircleIcon } from "@shopify/polaris-icons";
+import { authenticate, isTestBilling, PLAN_PRO, PLAN_PREMIUM } from "../shopify.server";
+import {
+  resolveShopPlan,
+  getEarlyAdopterSlotsLeft,
+} from "../plan-gate.server";
+
+const CLIENT_PLAN_PRO = "Pro";
+const CLIENT_PLAN_PREMIUM = "Premium";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { admin, billing, session } = await authenticate.admin(request);
-  const shop = session.shop;
+  const { billing, session } = await authenticate.admin(request);
 
-  // Check current plan
   const check = await billing.check();
-  let currentPlan = "Free";
-  if (check.hasActivePayment) {
-    currentPlan = check.appSubscriptions[0].name;
-  }
+  const resolved = await resolveShopPlan(session.shop, check);
+  const slotsLeft = await getEarlyAdopterSlotsLeft();
 
-  // Sync to database
-  await prisma.storeSettings.upsert({
-    where: { shop },
-    update: { plan: currentPlan },
-    create: { shop, plan: currentPlan },
+  return json({
+    currentPlan: resolved.plan,
+    isEarlyAdopter: resolved.isEarlyAdopter,
+    earlyAdopterSlotsLeft: slotsLeft,
   });
-
-  return { currentPlan };
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { billing } = await authenticate.admin(request);
-  const formData = await request.formData();
-  const plan = formData.get("plan") as string;
+  const fd = await request.formData();
+  const plan = fd.get("plan") as string;
 
-  if (plan === "Basic") {
+  if (plan === PLAN_PRO || plan === PLAN_PREMIUM) {
     await billing.request({
-      plan: "Basic",
-      isTest: true,
-      returnUrl: `https://${process.env.SHOP_CUSTOM_DOMAIN || "admin.shopify.com"}/store/${new URL(request.url).searchParams.get("shop")?.split(".")[0]}/apps/seo-suite/app/pricing`,
-    });
-  } else if (plan === "Pro") {
-    await billing.request({
-      plan: "Pro",
-      isTest: true,
-      returnUrl: `https://${process.env.SHOP_CUSTOM_DOMAIN || "admin.shopify.com"}/store/${new URL(request.url).searchParams.get("shop")?.split(".")[0]}/apps/seo-suite/app/pricing`,
+      plan,
+      isTest: isTestBilling,
     });
   }
 
-  return null;
+  return json({ ok: true });
 };
 
+function FeatureRow({ children, included }: { children: React.ReactNode; included: boolean }) {
+  return (
+    <InlineStack gap="200" blockAlign="center" wrap={false}>
+      <span style={{ color: included ? "var(--p-color-text-success)" : "var(--p-color-text-secondary)", display: "flex" }}>
+        <Icon source={CheckCircleIcon} />
+      </span>
+      <Text as="span" variant="bodySm" tone={included ? undefined : "subdued"}>
+        {children}
+      </Text>
+    </InlineStack>
+  );
+}
+
 export default function PricingPage() {
-  const { currentPlan } = useLoaderData<typeof loader>();
+  const { currentPlan, isEarlyAdopter, earlyAdopterSlotsLeft } =
+    useLoaderData<typeof loader>();
   const fetcher = useFetcher<typeof action>();
 
   const isSubmitting = fetcher.state === "submitting";
-  const submittingPlan = fetcher.formData?.get("plan");
+  const submittingPlan = fetcher.formData?.get("plan") as string | undefined;
 
-  const handleSubscribe = (plan: string) => {
-    fetcher.submit({ plan }, { method: "POST" });
+  const handleSubscribe = (planName: string) => {
+    fetcher.submit({ plan: planName }, { method: "POST" });
   };
+
+  const isPro = currentPlan === "pro";
+  const isPremium = currentPlan === "premium";
+  const isFree = !isPro && !isPremium;
 
   return (
     <Page>
       <TitleBar title="Subscription Plans" />
       <BlockStack gap="500">
+        {isEarlyAdopter && (
+          <Banner tone="success">
+            <Text as="p" variant="bodyMd">
+              You're an early adopter! All Pro features are free for you.
+              {earlyAdopterSlotsLeft !== null && earlyAdopterSlotsLeft > 0
+                ? ` Only ${earlyAdopterSlotsLeft} early adopter spots remaining.`
+                : ""}
+            </Text>
+          </Banner>
+        )}
+
         <Layout>
           <Layout.Section>
             <BlockStack gap="400" inlineAlign="center">
@@ -82,86 +107,147 @@ export default function PricingPage() {
                 Choose the right plan for your store
               </Text>
               <Text as="p" tone="subdued" alignment="center">
-                Upgrade to unlock more AI generations and automated SEO scans.
+                Upgrade to unlock more AI generations, blog writing, and automated SEO scans.
               </Text>
             </BlockStack>
           </Layout.Section>
 
           <Layout.Section>
             <Grid>
-              <Grid.Cell columnSpan={{xs: 6, sm: 4, md: 4, lg: 4, xl: 4}}>
+              {/* FREE */}
+              <Grid.Cell columnSpan={{ xs: 6, sm: 4, md: 4, lg: 4, xl: 4 }}>
                 <Card>
                   <BlockStack gap="400">
                     <InlineStack align="space-between">
                       <Text as="h3" variant="headingMd">Free</Text>
-                      {currentPlan === "Free" && <Badge tone="success">Current</Badge>}
+                      {isFree && !isEarlyAdopter && <Badge tone="success">Current</Badge>}
                     </InlineStack>
-                    <Text as="h2" variant="heading2xl">$0<span style={{ fontSize: '1rem', color: 'gray' }}>/mo</span></Text>
-                    <List>
-                      <List.Item>Basic SEO Audit</List.Item>
-                      <List.Item>100 AI Generations / mo</List.Item>
-                      <List.Item>Manual Image Compression</List.Item>
-                      <List.Item>Basic Schema Markup</List.Item>
-                    </List>
-                    <Button 
-                      disabled={currentPlan === "Free"} 
-                      fullWidth
-                    >
-                      {currentPlan === "Free" ? "Active" : "Downgrade"}
+                    <Text as="h2" variant="heading2xl">
+                      $0
+                      <span style={{ fontSize: "1rem", color: "gray" }}>/mo</span>
+                    </Text>
+                    <Divider />
+                    <BlockStack gap="200">
+                      <FeatureRow included>Basic SEO Audit (1/day)</FeatureRow>
+                      <FeatureRow included>5 AI Generations / day</FeatureRow>
+                      <FeatureRow included>5 Image Compressions / day</FeatureRow>
+                      <FeatureRow included>Meta Tags (view only)</FeatureRow>
+                      <FeatureRow included>Basic Schema (Product)</FeatureRow>
+                      <FeatureRow included>View Broken Links</FeatureRow>
+                      <FeatureRow included={false}>AI Blog Writer</FeatureRow>
+                      <FeatureRow included={false}>Bulk Editor</FeatureRow>
+                      <FeatureRow included={false}>Automations</FeatureRow>
+                    </BlockStack>
+                    <Button disabled={isFree && !isEarlyAdopter} fullWidth>
+                      {isFree && !isEarlyAdopter ? "Active" : "Downgrade"}
                     </Button>
                   </BlockStack>
                 </Card>
               </Grid.Cell>
 
-              <Grid.Cell columnSpan={{xs: 6, sm: 4, md: 4, lg: 4, xl: 4}}>
-                <Card background={currentPlan === "Basic" ? "bg-surface-secondary" : "bg-surface"}>
+              {/* PRO */}
+              <Grid.Cell columnSpan={{ xs: 6, sm: 4, md: 4, lg: 4, xl: 4 }}>
+                <Card background="bg-surface-secondary">
                   <BlockStack gap="400">
-                    <InlineStack align="space-between">
-                      <Text as="h3" variant="headingMd">Basic</Text>
-                      {currentPlan === "Basic" && <Badge tone="success">Current</Badge>}
+                    <InlineStack align="space-between" blockAlign="center">
+                      <InlineStack gap="200" blockAlign="center">
+                        <Text as="h3" variant="headingMd">Pro</Text>
+                        <Badge tone="attention">Most Popular</Badge>
+                      </InlineStack>
+                      {(isPro || isEarlyAdopter) && (
+                        <Badge tone="success">
+                          {isEarlyAdopter ? "Early Adopter" : "Current"}
+                        </Badge>
+                      )}
                     </InlineStack>
-                    <Text as="h2" variant="heading2xl">$9.99<span style={{ fontSize: '1rem', color: 'gray' }}>/mo</span></Text>
-                    <List>
-                      <List.Item>Advanced SEO Audit</List.Item>
-                      <List.Item>1,000 AI Generations / mo</List.Item>
-                      <List.Item>Bulk Image Compression</List.Item>
-                      <List.Item>Weekly Automated Scans</List.Item>
-                    </List>
-                    <Button 
-                      variant={currentPlan === "Basic" ? "plain" : "primary"}
-                      disabled={currentPlan === "Basic"} 
-                      loading={isSubmitting && submittingPlan === "Basic"}
-                      onClick={() => handleSubscribe("Basic")}
-                      fullWidth
-                    >
-                      {currentPlan === "Basic" ? "Active" : "Upgrade to Basic"}
-                    </Button>
+
+                    {isEarlyAdopter ? (
+                      <BlockStack gap="100">
+                        <InlineStack gap="200" blockAlign="end">
+                          <Text as="h2" variant="heading2xl">FREE</Text>
+                          <Text as="span" variant="bodyMd" tone="subdued">
+                            <s>$8.99/mo</s>
+                          </Text>
+                        </InlineStack>
+                        <Badge tone="success">Early Adopter Pricing</Badge>
+                      </BlockStack>
+                    ) : (
+                      <Text as="h2" variant="heading2xl">
+                        $8.99
+                        <span style={{ fontSize: "1rem", color: "gray" }}>/mo</span>
+                      </Text>
+                    )}
+
+                    <Divider />
+                    <BlockStack gap="200">
+                      <FeatureRow included>Unlimited SEO Audits</FeatureRow>
+                      <FeatureRow included>100 AI Generations / mo</FeatureRow>
+                      <FeatureRow included>50 Image Compressions / mo</FeatureRow>
+                      <FeatureRow included>5 AI Blog Posts / mo</FeatureRow>
+                      <FeatureRow included>Edit + Bulk Meta Tags</FeatureRow>
+                      <FeatureRow included>All Schema Types</FeatureRow>
+                      <FeatureRow included>Internal Link Suggestions</FeatureRow>
+                      <FeatureRow included>Broken Link Monitoring</FeatureRow>
+                      <FeatureRow included>Bulk Editor</FeatureRow>
+                      <FeatureRow included>Weekly Automated Scans</FeatureRow>
+                      <FeatureRow included={false}>Custom AI Prompts</FeatureRow>
+                      <FeatureRow included={false}>One-Click Fix</FeatureRow>
+                    </BlockStack>
+
+                    {isEarlyAdopter ? (
+                      <Button disabled fullWidth>
+                        Active (Early Adopter)
+                      </Button>
+                    ) : (
+                      <Button
+                        variant={isPro ? "plain" : "primary"}
+                        disabled={isPro}
+                        loading={isSubmitting && submittingPlan === CLIENT_PLAN_PRO}
+                        onClick={() => handleSubscribe(CLIENT_PLAN_PRO)}
+                        fullWidth
+                      >
+                        {isPro ? "Active" : "Start 7-Day Free Trial"}
+                      </Button>
+                    )}
                   </BlockStack>
                 </Card>
               </Grid.Cell>
 
-              <Grid.Cell columnSpan={{xs: 6, sm: 4, md: 4, lg: 4, xl: 4}}>
-                <Card background={currentPlan === "Pro" ? "bg-surface-secondary" : "bg-surface"}>
+              {/* PREMIUM */}
+              <Grid.Cell columnSpan={{ xs: 6, sm: 4, md: 4, lg: 4, xl: 4 }}>
+                <Card>
                   <BlockStack gap="400">
                     <InlineStack align="space-between">
-                      <Text as="h3" variant="headingMd">Pro</Text>
-                      {currentPlan === "Pro" && <Badge tone="success">Current</Badge>}
+                      <Text as="h3" variant="headingMd">Premium</Text>
+                      {isPremium && <Badge tone="success">Current</Badge>}
                     </InlineStack>
-                    <Text as="h2" variant="heading2xl">$29.99<span style={{ fontSize: '1rem', color: 'gray' }}>/mo</span></Text>
-                    <List>
-                      <List.Item>Unlimited AI Generations</List.Item>
-                      <List.Item>Custom AI Prompt Templates</List.Item>
-                      <List.Item>Daily Automated Scans</List.Item>
-                      <List.Item>Priority Support</List.Item>
-                    </List>
-                    <Button 
-                      variant={currentPlan === "Pro" ? "plain" : "primary"}
-                      disabled={currentPlan === "Pro"} 
-                      loading={isSubmitting && submittingPlan === "Pro"}
-                      onClick={() => handleSubscribe("Pro")}
+                    <Text as="h2" variant="heading2xl">
+                      $14.99
+                      <span style={{ fontSize: "1rem", color: "gray" }}>/mo</span>
+                    </Text>
+                    <Divider />
+                    <BlockStack gap="200">
+                      <Text as="p" variant="bodySm" fontWeight="semibold">
+                        Everything in Pro, plus:
+                      </Text>
+                      <FeatureRow included>Unlimited AI Generations</FeatureRow>
+                      <FeatureRow included>Unlimited Image Compressions</FeatureRow>
+                      <FeatureRow included>Unlimited AI Blog Posts</FeatureRow>
+                      <FeatureRow included>AI Auto Meta Tags</FeatureRow>
+                      <FeatureRow included>Custom AI Prompt Templates</FeatureRow>
+                      <FeatureRow included>One-Click Fix</FeatureRow>
+                      <FeatureRow included>Daily Automated Scans</FeatureRow>
+                      <FeatureRow included>Auto-Redirect Broken Links</FeatureRow>
+                      <FeatureRow included>Priority Support</FeatureRow>
+                    </BlockStack>
+                    <Button
+                      variant={isPremium ? "plain" : "primary"}
+                      disabled={isPremium}
+                      loading={isSubmitting && submittingPlan === CLIENT_PLAN_PREMIUM}
+                      onClick={() => handleSubscribe(CLIENT_PLAN_PREMIUM)}
                       fullWidth
                     >
-                      {currentPlan === "Pro" ? "Active" : "Upgrade to Pro"}
+                      {isPremium ? "Active" : "Start 7-Day Free Trial"}
                     </Button>
                   </BlockStack>
                 </Card>

@@ -8,8 +8,10 @@ import {
 import { PrismaSessionStorage } from "@shopify/shopify-app-session-storage-prisma";
 import prisma from "./db.server";
 
-export const MONTHLY_PLAN = 'Monthly subscription';
-export const ANNUAL_PLAN = 'Annual subscription';
+export const PLAN_PRO = "Pro";
+export const PLAN_PREMIUM = "Premium";
+
+const isTestBilling = process.env.BILLING_TEST_MODE !== "false";
 
 const shopify = shopifyApp({
   apiKey: process.env.SHOPIFY_API_KEY,
@@ -25,21 +27,33 @@ const shopify = shopifyApp({
     expiringOfflineAccessTokens: true,
   },
   billing: {
-    "Basic": {
-      amount: 9.99,
-      currencyCode: "USD",
-      interval: BillingInterval.Every30Days,
+    [PLAN_PRO]: {
+      lineItems: [
+        {
+          amount: 8.99,
+          currencyCode: "USD",
+          interval: BillingInterval.Every30Days,
+        },
+      ],
+      trialDays: 7,
     },
-    "Pro": {
-      amount: 29.99,
-      currencyCode: "USD",
-      interval: BillingInterval.Every30Days,
+    [PLAN_PREMIUM]: {
+      lineItems: [
+        {
+          amount: 14.99,
+          currencyCode: "USD",
+          interval: BillingInterval.Every30Days,
+        },
+      ],
+      trialDays: 7,
     },
   },
   ...(process.env.SHOP_CUSTOM_DOMAIN
     ? { customShopDomains: [process.env.SHOP_CUSTOM_DOMAIN] }
     : {}),
 });
+
+export { isTestBilling };
 
 export default shopify;
 export const apiVersion = ApiVersion.January25;
